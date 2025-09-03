@@ -1,0 +1,493 @@
+From 257c5fb43b56d8009fd54f3e87c74978065a0645 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Wed, 3 Sep 2025 13:47:40 +0000
+Subject: [PATCH] feat: initial scaffolding + CI per docs/spec.md
+
+---
+ .github/workflows/ci.yml       | 25 +++++++++++++++++++++++++
+ .gitignore                     |  2 ++
+ README.md                      | 25 +++++++++++++++++++++++++
+ bot/__init__.py                |  0
+ bot/configs/config.yaml        |  1 +
+ bot/configs/params_gumiho.yaml |  1 +
+ bot/core/__init__.py           |  0
+ bot/core/api.py                |  8 ++++++++
+ bot/core/backtest.py           |  8 ++++++++
+ bot/core/data_feed.py          | 11 +++++++++++
+ bot/core/execution.py          |  8 ++++++++
+ bot/core/fees.py               |  8 ++++++++
+ bot/core/indicators.py         |  8 ++++++++
+ bot/core/market_state.py       |  8 ++++++++
+ bot/core/persistence.py        |  9 +++++++++
+ bot/core/reporting.py          |  9 +++++++++
+ bot/core/risk.py               |  8 ++++++++
+ bot/core/strategies.py         |  8 ++++++++
+ bot/core/universe.py           |  8 ++++++++
+ bot/core/walkforward.py        |  8 ++++++++
+ bot/scripts/export_report.py   | 18 ++++++++++++++++++
+ bot/scripts/run_live.py        | 12 ++++++++++++
+ bot/scripts/run_paper.py       | 24 ++++++++++++++++++++++++
+ conftest.py                    |  9 +++++++++
+ data/stubs/config.json         |  1 +
+ data/stubs/ticks.csv           |  1 +
+ pyproject.toml                 |  2 ++
+ requirements.txt               |  2 ++
+ tests/test_backtest.py         |  9 +++++++++
+ tests/test_execution_sim.py    |  8 ++++++++
+ 30 files changed, 249 insertions(+)
+ create mode 100644 .github/workflows/ci.yml
+ create mode 100644 .gitignore
+ create mode 100644 bot/__init__.py
+ create mode 100644 bot/configs/config.yaml
+ create mode 100644 bot/configs/params_gumiho.yaml
+ create mode 100644 bot/core/__init__.py
+ create mode 100644 bot/core/api.py
+ create mode 100644 bot/core/backtest.py
+ create mode 100644 bot/core/data_feed.py
+ create mode 100644 bot/core/execution.py
+ create mode 100644 bot/core/fees.py
+ create mode 100644 bot/core/indicators.py
+ create mode 100644 bot/core/market_state.py
+ create mode 100644 bot/core/persistence.py
+ create mode 100644 bot/core/reporting.py
+ create mode 100644 bot/core/risk.py
+ create mode 100644 bot/core/strategies.py
+ create mode 100644 bot/core/universe.py
+ create mode 100644 bot/core/walkforward.py
+ create mode 100644 bot/scripts/export_report.py
+ create mode 100644 bot/scripts/run_live.py
+ create mode 100644 bot/scripts/run_paper.py
+ create mode 100644 conftest.py
+ create mode 100644 data/stubs/config.json
+ create mode 100644 data/stubs/ticks.csv
+ create mode 100644 pyproject.toml
+ create mode 100644 requirements.txt
+ create mode 100644 tests/test_backtest.py
+ create mode 100644 tests/test_execution_sim.py
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..904412e
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,25 @@
++name: CI
++
++on: [push, pull_request]
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-python@v5
++        with:
++          python-version: '3.11'
++      - run: pip install -r requirements.txt
++      - run: ruff check .
++      - run: pytest -q
++      - uses: actions/upload-artifact@v3
++        with:
++          name: html_report
++          path: reports/
++          if-no-files-found: ignore
++      - uses: actions/upload-artifact@v3
++        with:
++          name: logs
++          path: logs/
++          if-no-files-found: ignore
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..21c1a3a
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++__pycache__/
++reports/
+diff --git a/README.md b/README.md
+index bf92cb9..d8ffa62 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,26 @@
+ # cdx_trading_code
++
++Scaffolding for a Bybit 1-minute scalping system.
++
++## Project structure
++- `bot/`: core modules and scripts
++- `tests/`: unit tests
++- `docs/spec.md`: detailed specification
++
++## Installation
++```bash
++pip install -r requirements.txt
++```
++
++## Usage
++Generate a dummy paper trading report:
++```bash
++python bot/scripts/run_paper.py
++```
++The HTML report will be written to `reports/paper.html`.
++
++## Testing
++```bash
++ruff check .
++pytest -q
++```
+diff --git a/bot/__init__.py b/bot/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/bot/configs/config.yaml b/bot/configs/config.yaml
+new file mode 100644
+index 0000000..77942cd
+--- /dev/null
++++ b/bot/configs/config.yaml
+@@ -0,0 +1 @@
++data_path: data/stubs
+diff --git a/bot/configs/params_gumiho.yaml b/bot/configs/params_gumiho.yaml
+new file mode 100644
+index 0000000..d85c99a
+--- /dev/null
++++ b/bot/configs/params_gumiho.yaml
+@@ -0,0 +1 @@
++example_param: 1
+diff --git a/bot/core/__init__.py b/bot/core/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/bot/core/api.py b/bot/core/api.py
+new file mode 100644
+index 0000000..7a8c587
+--- /dev/null
++++ b/bot/core/api.py
+@@ -0,0 +1,8 @@
++"""Stub API module."""
++
++from __future__ import annotations
++
++
++def server_time() -> int:
++    """Return fixed server time."""
++    return 0
+diff --git a/bot/core/backtest.py b/bot/core/backtest.py
+new file mode 100644
+index 0000000..c7fbd2e
+--- /dev/null
++++ b/bot/core/backtest.py
+@@ -0,0 +1,8 @@
++"""Stub backtest module."""
++
++from __future__ import annotations
++
++
++def run_backtest() -> dict[str, int]:
++    """Return simple backtest result."""
++    return {"trades": 0}
+diff --git a/bot/core/data_feed.py b/bot/core/data_feed.py
+new file mode 100644
+index 0000000..2c3014b
+--- /dev/null
++++ b/bot/core/data_feed.py
+@@ -0,0 +1,11 @@
++"""Stub data feed module."""
++
++from __future__ import annotations
++
++
++class DataFeed:
++    """Provide stubbed market data."""
++
++    def stream(self) -> list[str]:
++        """Return sample market data."""
++        return ["tick1", "tick2"]
+diff --git a/bot/core/execution.py b/bot/core/execution.py
+new file mode 100644
+index 0000000..0414f99
+--- /dev/null
++++ b/bot/core/execution.py
+@@ -0,0 +1,8 @@
++"""Stub execution module."""
++
++from __future__ import annotations
++
++
++def simulate_trade() -> str:
++    """Return placeholder fill message."""
++    return "filled"
+diff --git a/bot/core/fees.py b/bot/core/fees.py
+new file mode 100644
+index 0000000..ed90caf
+--- /dev/null
++++ b/bot/core/fees.py
+@@ -0,0 +1,8 @@
++"""Stub fees module."""
++
++from __future__ import annotations
++
++
++def taker_fee() -> float:
++    """Return default taker fee rate."""
++    return 0.00055
+diff --git a/bot/core/indicators.py b/bot/core/indicators.py
+new file mode 100644
+index 0000000..715d896
+--- /dev/null
++++ b/bot/core/indicators.py
+@@ -0,0 +1,8 @@
++"""Stub indicators module."""
++
++from __future__ import annotations
++
++
++def ema(values: list[float], period: int) -> float:
++    """Return simple average as placeholder for EMA."""
++    return sum(values) / len(values)
+diff --git a/bot/core/market_state.py b/bot/core/market_state.py
+new file mode 100644
+index 0000000..03a98c2
+--- /dev/null
++++ b/bot/core/market_state.py
+@@ -0,0 +1,8 @@
++"""Stub market state module."""
++
++from __future__ import annotations
++
++
++def is_normal() -> bool:
++    """Return market regime."""
++    return True
+diff --git a/bot/core/persistence.py b/bot/core/persistence.py
+new file mode 100644
+index 0000000..029587b
+--- /dev/null
++++ b/bot/core/persistence.py
+@@ -0,0 +1,9 @@
++"""Stub persistence module."""
++
++from __future__ import annotations
++from pathlib import Path
++
++
++def save_log(path: Path, message: str) -> None:
++    """Save a log message."""
++    path.write_text(message)
+diff --git a/bot/core/reporting.py b/bot/core/reporting.py
+new file mode 100644
+index 0000000..f156ffa
+--- /dev/null
++++ b/bot/core/reporting.py
+@@ -0,0 +1,9 @@
++"""Stub reporting module."""
++
++from __future__ import annotations
++from pathlib import Path
++
++
++def generate_report(path: Path) -> None:
++    """Create an empty report file."""
++    path.write_text("<html></html>")
+diff --git a/bot/core/risk.py b/bot/core/risk.py
+new file mode 100644
+index 0000000..e0aa8b3
+--- /dev/null
++++ b/bot/core/risk.py
+@@ -0,0 +1,8 @@
++"""Stub risk module."""
++
++from __future__ import annotations
++
++
++def position_size(balance: float, risk_fraction: float) -> float:
++    """Calculate position size."""
++    return balance * risk_fraction
+diff --git a/bot/core/strategies.py b/bot/core/strategies.py
+new file mode 100644
+index 0000000..7a7d7ff
+--- /dev/null
++++ b/bot/core/strategies.py
+@@ -0,0 +1,8 @@
++"""Stub strategies module."""
++
++from __future__ import annotations
++
++
++def select_strategy(score_a: int, score_b: int) -> str:
++    """Select strategy with higher score."""
++    return "A" if score_a >= score_b else "B"
+diff --git a/bot/core/universe.py b/bot/core/universe.py
+new file mode 100644
+index 0000000..b28370c
+--- /dev/null
++++ b/bot/core/universe.py
+@@ -0,0 +1,8 @@
++"""Stub universe module."""
++
++from __future__ import annotations
++
++
++def get_symbols() -> list[str]:
++    """Return list of trading symbols."""
++    return ["BTCUSDT"]
+diff --git a/bot/core/walkforward.py b/bot/core/walkforward.py
+new file mode 100644
+index 0000000..dd22ceb
+--- /dev/null
++++ b/bot/core/walkforward.py
+@@ -0,0 +1,8 @@
++"""Stub walkforward module."""
++
++from __future__ import annotations
++
++
++def optimize() -> bool:
++    """Return placeholder optimization result."""
++    return True
+diff --git a/bot/scripts/export_report.py b/bot/scripts/export_report.py
+new file mode 100644
+index 0000000..b2003e6
+--- /dev/null
++++ b/bot/scripts/export_report.py
+@@ -0,0 +1,18 @@
++"""Stub script to export reports."""
++
++from __future__ import annotations
++from pathlib import Path
++
++
++def main() -> None:
++    """Export generated reports."""
++    reports = Path("reports")
++    if not reports.exists():
++        print("No reports found.")
++        return
++    for path in reports.glob("*.html"):
++        print(f"Exporting {path}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/bot/scripts/run_live.py b/bot/scripts/run_live.py
+new file mode 100644
+index 0000000..42eb6c1
+--- /dev/null
++++ b/bot/scripts/run_live.py
+@@ -0,0 +1,12 @@
++"""Stub entry point for live trading."""
++
++from __future__ import annotations
++
++
++def main() -> None:
++    """Entry point for live trading."""
++    print("Live trading not implemented.")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/bot/scripts/run_paper.py b/bot/scripts/run_paper.py
+new file mode 100644
+index 0000000..cae0ccc
+--- /dev/null
++++ b/bot/scripts/run_paper.py
+@@ -0,0 +1,24 @@
++"""Generate a dummy paper trading report."""
++
++from __future__ import annotations
++from pathlib import Path
++import sys
++
++ROOT = Path(__file__).resolve().parents[2]
++if str(ROOT) not in sys.path:
++    sys.path.append(str(ROOT))
++
++from bot.core.reporting import generate_report
++
++
++def main() -> None:
++    """Create a simple HTML report for paper trading."""
++    reports = Path("reports")
++    reports.mkdir(exist_ok=True)
++    report_file = reports / "paper.html"
++    generate_report(report_file)
++    print(f"Report generated at {report_file}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/conftest.py b/conftest.py
+new file mode 100644
+index 0000000..248624f
+--- /dev/null
++++ b/conftest.py
+@@ -0,0 +1,9 @@
++"""Configure test environment."""
++
++from __future__ import annotations
++from pathlib import Path
++import sys
++
++ROOT = Path(__file__).resolve().parent
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
+diff --git a/data/stubs/config.json b/data/stubs/config.json
+new file mode 100644
+index 0000000..7b975e3
+--- /dev/null
++++ b/data/stubs/config.json
+@@ -0,0 +1 @@
++{"example": 0}
+diff --git a/data/stubs/ticks.csv b/data/stubs/ticks.csv
+new file mode 100644
+index 0000000..f05f6f3
+--- /dev/null
++++ b/data/stubs/ticks.csv
+@@ -0,0 +1 @@
++timestamp,price\n0,0
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+index 0000000..24968bc
+--- /dev/null
++++ b/pyproject.toml
+@@ -0,0 +1,2 @@
++[tool.ruff]
++line-length = 100
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..71cc539
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,2 @@
++pytest
++ruff
+diff --git a/tests/test_backtest.py b/tests/test_backtest.py
+new file mode 100644
+index 0000000..6a24381
+--- /dev/null
++++ b/tests/test_backtest.py
+@@ -0,0 +1,9 @@
++"""Tests for backtest module."""
++
++from bot.core.backtest import run_backtest
++
++
++def test_run_backtest() -> None:
++    """Backtest should return zero trades in stub."""
++    result = run_backtest()
++    assert result["trades"] == 0
+diff --git a/tests/test_execution_sim.py b/tests/test_execution_sim.py
+new file mode 100644
+index 0000000..c6542ec
+--- /dev/null
++++ b/tests/test_execution_sim.py
+@@ -0,0 +1,8 @@
++"""Tests for execution simulation."""
++
++from bot.core.execution import simulate_trade
++
++
++def test_simulate_trade() -> None:
++    """Trade simulation should return 'filled'."""
++    assert simulate_trade() == "filled"
+-- 
+2.43.0
+

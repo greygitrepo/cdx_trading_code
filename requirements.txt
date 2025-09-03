@@ -1,0 +1,4 @@
+pytest
+ruff
+pydantic
+pyyaml
