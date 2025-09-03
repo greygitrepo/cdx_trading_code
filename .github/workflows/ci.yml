@@ -1,0 +1,25 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: ruff check .
+      - run: pytest -q
+      - uses: actions/upload-artifact@v3
+        with:
+          name: html_report
+          path: reports/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v3
+        with:
+          name: logs
+          path: logs/
+          if-no-files-found: ignore
