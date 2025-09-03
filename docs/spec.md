@@ -503,3 +503,27 @@ while True:
 - [ ] run_paper.py 2분 내 실행/리포트 산출
 - [ ] tests/* 통과, CI green
 - [ ] 이후 작업 TODO (실 WS/REST, 레짐 실데이터 연결, Walk-forward 튜닝)
+
+## Agent Execution Policy (must follow exactly)
+- base_branch: main
+- feature_branch: feat/initial-setup
+- push_policy:
+  - DO NOT remove or replace `origin`
+  - Use the preconfigured oauth2 remote as-is (do not print token)
+- pr:
+  title: "feat: initial scaffolding + CI"
+  body_sections:
+    - Overview (what was created, why)
+    - Structure (folders/files)
+    - How to run (local + CI)
+    - Test/CI status
+    - TODO (next steps)
+- ci:
+  python: "3.11"
+  must_pass_without_secrets: true
+- artifacts:
+  - reports/**
+  - logs/**
+- hard_rules:
+  - Never push directly to `main`
+  - If push blocked, output patch.zip + apply_patch.sh inline (base64) immediately
