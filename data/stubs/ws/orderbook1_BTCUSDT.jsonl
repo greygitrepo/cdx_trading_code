@@ -1,0 +1,4 @@
+{"type": "snapshot", "seq": 1, "ts": 1000, "bids": [[100.0, 1.0]], "asks": [[100.1, 2.0]]}
+{"type": "delta", "seq": 2, "ts": 1001, "bids": [[100.0, 1.5]], "asks": []}
+{"type": "delta", "seq": 4, "ts": 1002, "bids": [[99.9, 1.0]], "asks": []}
+{"type": "snapshot", "seq": 10, "ts": 1010, "bids": [[101.0, 3.0]], "asks": [[101.2, 1.0]]}
