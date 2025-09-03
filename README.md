@@ -27,6 +27,12 @@ python bot/scripts/run_paper.py
 ```
 Report is written to `reports/paper.html`.
 
+## Data Layer (Stub/Live)
+- Modes via env: `STUB_MODE` (default true), `PAPER_MODE` (default true), `LIVE_MODE` (default false).
+- WS (stub replay): `bot/core/data_ws.py` reads `data/stubs/ws/*.jsonl` for ticker/orderbook (L1/L5).
+- REST (stub fixtures): `bot/core/data_rest.py` reads `data/stubs/rest/*.json` when `STUB_MODE=true`.
+- Switch to live by exporting `STUB_MODE=false` (WS live wiring not enabled in CI).
+
 ## Configuration
 - Default app config: `bot/configs/config.yaml`
 - Parameter pack: `bot/configs/params_gumiho.yaml`
