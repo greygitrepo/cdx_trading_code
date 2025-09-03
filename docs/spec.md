@@ -479,3 +479,27 @@ while True:
 [12]: https://bybit-exchange.github.io/docs/api-explorer/v5/market/time?utm_source=chatgpt.com "Get Bybit Server Time | Bybit API Documentation"
 [13]: https://bybit-exchange.github.io/docs/v5/ws/connect?utm_source=chatgpt.com "Connect | Bybit API Documentation - GitHub Pages"
 [14]: https://bybit-exchange.github.io/docs/v5/market/recent-trade?utm_source=chatgpt.com "Get Recent Public Trades | Bybit API Documentation"
+
+
+
+## A. Agent Checklist (실행 우선 순위)
+1) 스캐폴드 생성 → 2) 더미 백테스트(run_paper.py) 가동 → 3) 테스트/CI 그린 → 4) PR 생성
+모든 파일은 레포 상대경로/완전코드로 제시.
+
+## B. Repository Conventions
+- Python 3.11 고정, ruff/pytest 사용, line-length 100
+- data/stubs/ 에 더미 CSV/JSON 생성 (틱/오더북 L5/펀딩/OI 최소 구조)
+- 환경변수 이름 규약(라이브에서만 사용): BYBIT_API_KEY, BYBIT_API_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+## C. CI 상세
+- .github/workflows/ci.yml
+  - on: [push, pull_request]
+  - steps: setup-python@v5 → pip install -r requirements.txt → ruff check → pytest -q
+  - artifacts: html_report/**, logs/**
+- 시크릿 없이도 CI는 그린이어야 한다(테스트는 더미 데이터 기반).
+
+## D. Deliverables (PR 본문 체크리스트)
+- [ ] 프로젝트 구조/설치방법/실행/테스트/리포트 README 반영
+- [ ] run_paper.py 2분 내 실행/리포트 산출
+- [ ] tests/* 통과, CI green
+- [ ] 이후 작업 TODO (실 WS/REST, 레짐 실데이터 연결, Walk-forward 튜닝)
