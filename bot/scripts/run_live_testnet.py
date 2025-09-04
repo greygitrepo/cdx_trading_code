@@ -32,6 +32,8 @@ if str(_ROOT) not in sys.path:
 from bot.core.exchange.bybit_v5 import BybitV5Client, BybitAPIError  # noqa: E402
 from bot.core.execution.risk_rules import RiskContext, check_balance_guard, check_order_size, slippage_guard  # noqa: E402
 from bot.core.strategy_runner import build_order_plan  # noqa: E402
+from bot.core.strategies import StrategyParams, mis_signal, vrs_signal, lsr_signal, select_strategy  # noqa: E402
+from bot.core.indicators import Rolling  # noqa: E402
 try:
     from bot.core.exchange.bybit_ws import BybitPrivateWS  # type: ignore # noqa: E402
 except Exception:  # noqa: BLE001
@@ -85,6 +87,10 @@ def main() -> None:
     category = os.environ.get("BYBIT_CATEGORY", "linear")
     leverage = float(os.environ.get("LEVERAGE", "10"))
     enable_ws = os.environ.get("ENABLE_PRIVATE_WS", "false").lower() == "true"
+    # Regime/signal thresholds
+    spread_threshold = float(os.environ.get("MIS_SPREAD_THRESHOLD", "0.0004"))
+    spread_pause_mult = float(os.environ.get("SPREAD_PAUSE_MULT", "3.0"))
+    min_depth_usd = float(os.environ.get("MIN_DEPTH_USD", "15000"))
 
     # 1) API key validation
     try:
@@ -145,6 +151,8 @@ def main() -> None:
     loop_interval = float(os.environ.get("LOOP_INTERVAL_SEC", "5"))
     max_iters = int(os.environ.get("MAX_ITERS", "3"))
     mids: list[float] = []
+    closes = Rolling(maxlen=120)
+    vols = Rolling(maxlen=120)
 
     for i in range(max_iters):
         ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
@@ -164,20 +172,34 @@ def main() -> None:
             time.sleep(loop_interval)
             continue
         mids.append(mid)
+        closes.add(mid)
+        vols.add(max(0.0, bid_sz + ask_sz))
         if len(mids) > 50:
             mids.pop(0)
         logger.info(f"[{i+1}/{max_iters}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}")
 
-        # 3) Simple MIS-like signal via orderbook imbalance
-        signal = 0
-        if obi >= 0.60:
-            signal = +1
-        elif obi <= -0.60:
-            signal = -1
-        else:
-            logger.info("No strong signal; sleeping")
+        # Regime pause checks (liquidity/spread)
+        if spread >= spread_threshold * spread_pause_mult or (bid_sz + ask_sz) * mid < min_depth_usd:
+            logger.info("Regime=PAUSE (wide spread or low depth); sleeping")
             time.sleep(loop_interval)
             continue
+
+        # 3) Strategy pack scoring (MIS/VRS/LSR) and selection
+        sp = StrategyParams()
+        mis = mis_signal(closes.list(), orderbook_imbalance=(obi + 1) / 2, spread=spread, spread_threshold=spread_threshold, params=sp)
+        vrs = vrs_signal(closes.list(), vols.list(), sp)
+        # Heuristic for LSR inputs
+        wick_long = False
+        trade_burst = (bid_sz + ask_sz) > 0 and vols.list() and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
+        oi_drop = False  # not available without OI feed
+        lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
+        strat_name, strat_side = select_strategy(mis, vrs, lsr)
+        if strat_name is None or strat_side is None:
+            logger.info("No strategy consensus; sleeping")
+            time.sleep(loop_interval)
+            continue
+        signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
+        logger.info(f"Strategy selected: {strat_name} -> {('BUY' if signal>0 else 'SELL')}")
 
         prefer_limit = spread <= 0.0005
         # Avoid taker near funding if configured and nextFundingTime is close

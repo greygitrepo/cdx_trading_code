@@ -46,15 +46,22 @@ python bot/scripts/run_live_testnet.py
 
 What it does
 - Validates API key via `/v5/account/wallet-balance` and logs result
-- Pulls L1 orderbook and computes mid price
-- Builds a tiny order plan from a dummy long signal, runs risk checks
-- Places a small order and immediately cancels it (or `DRY_RUN=true` to simulate)
+- Loads instrument filters (tickSize/qtyStep/minQty) and sets leverage
+- Starts a timed loop: regime checks → strategy scoring(MIS/VRS/LSR) → order routing (maker/taker) → reflect (orders/positions) → cancel (smoke)
+- Applies precision-aware sizing, funding-window avoidance, trailing/TP/SL, and time-stop
 
 Safety and notes
 - Secrets: only read from environment; do not commit `.env`.
 - Rate limit: built-in exponential backoff on 429/selected `retCode`s with retries.
 - Resilience: idempotency via `orderLinkId` on order placement.
 - Logging: structured JSONL events under `logs/live_testnet/events.jsonl` and a rotating `app.log`.
+- Optional WS: set `ENABLE_PRIVATE_WS=true` and install `websocket-client` to stream private `order/execution/position` events into JSONL.
+
+Env highlights
+- `LEVERAGE`, `MAX_ALLOC_PCT`, `MIN_FREE_BALANCE_USDT`, `SLIPPAGE_GUARD_PCT`, `DRY_RUN`
+- Regime/signal: `MIS_SPREAD_THRESHOLD`, `SPREAD_PAUSE_MULT`, `MIN_DEPTH_USD`
+- Funding guard: `AVOID_TAKER_WITHIN_MIN`
+- Protection: `TP_PCT`, `SL_PCT`, `TRAIL_AFTER_TP1_PCT`, `TIME_STOP_SEC`
 
 ## Data Layer (Stub/Live)
 - Modes via env: `STUB_MODE` (default true), `PAPER_MODE` (default true), `LIVE_MODE` (default false).
