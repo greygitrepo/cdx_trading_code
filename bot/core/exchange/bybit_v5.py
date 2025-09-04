@@ -161,7 +161,19 @@ class BybitV5Client:
                 attempt += 1
                 continue
 
-            j = resp.json()
+            # Attempt to parse JSON; if not JSON, raise a clear API error with snippet
+            try:
+                j = resp.json()
+            except Exception:
+                body = None
+                try:
+                    body = resp.text
+                except Exception:
+                    body = "<unreadable>"
+                snippet = (body or "")[:200]
+                status = resp.status_code
+                hdrs = dict(resp.headers)
+                raise BybitAPIError(status, f"HTTP {status} non-JSON response: {snippet}", {"status": status, "headers": hdrs, "body": body})
             ret_code = j.get("retCode", 0)
             if ret_code != 0:
                 # Retry on transient codes, else raise
