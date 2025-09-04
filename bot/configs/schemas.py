@@ -41,6 +41,10 @@ class RiskConfig(BaseModel):
     risk_per_trade_max: float = 0.006
     daily_max_loss: float = 0.02
     per_symbol_concentration: float = 0.40
+    # Multi-symbol management
+    max_symbols: int = 5
+    total_budget_usdt: float | None = None
+    use_balance_ratio: float = 1.0
 
 
 class RegimeParams(BaseModel):

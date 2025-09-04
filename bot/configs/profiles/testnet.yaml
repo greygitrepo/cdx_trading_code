@@ -14,6 +14,10 @@ risk:
   risk_per_trade_max: 0.005        # 0.5%
   daily_max_loss: 0.015            # 2% → 1.5% 데일리 컷
   per_symbol_concentration: 0.30   # 40% → 30%
+  # Multi-symbol runtime controls
+  max_symbols: 5
+  total_budget_usdt: null          # null이면 Env 또는 잔고 사용
+  use_balance_ratio: 1.0
 
 params:
   universe:
@@ -59,4 +63,3 @@ params:
 
   funding_time:
     avoid_taker_within_min: 5
-
