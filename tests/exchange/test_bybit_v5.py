@@ -179,3 +179,13 @@ def test_close_position_market_payload(monkeypatch):
     assert sent["auth"] is True
     assert sent["data"]["reduceOnly"] is True
     assert sent["data"]["orderType"] == "Market"
+
+
+def test_side_normalization_unit():
+    from bot.core.exchange.bybit_v5 import _canon_side
+
+    assert _canon_side("buy") == "Buy"
+    assert _canon_side("BUY") == "Buy"
+    assert _canon_side("long") == "Buy"
+    assert _canon_side("sell") == "Sell"
+    assert _canon_side("Short") == "Sell"

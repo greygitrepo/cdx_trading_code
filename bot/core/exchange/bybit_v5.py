@@ -50,6 +50,22 @@ class EdgeProtectionError(BybitAPIError):
     pass
 
 
+def _canon_side(side: str) -> str:
+    """Normalize user-provided side into Bybit v5 canonical casing.
+
+    Accepts common variants: buy/BUY/long -> Buy, sell/SELL/short -> Sell.
+    """
+    s = str(side).strip().lower()
+    if s in {"buy", "long"}:
+        return "Buy"
+    if s in {"sell", "short"}:
+        return "Sell"
+    # Already canonical? guard for unexpected casing
+    if s in {"buy", "sell"}:
+        return s.capitalize()
+    raise ValueError(f"invalid side: {side}")
+
+
 class BybitV5Client:
     def __init__(
         self,
@@ -278,10 +294,12 @@ class BybitV5Client:
         tpTriggerBy: Optional[str] = None,
         slTriggerBy: Optional[str] = None,
     ) -> Dict[str, Any]:
+        canon_side = _canon_side(side)
+        cat = category or self.default_category or "linear"
         payload = {
-            "category": category or self.default_category,
+            "category": cat,
             "symbol": symbol,
-            "side": side,
+            "side": canon_side,
             "orderType": orderType,
             "qty": str(qty),
             "timeInForce": timeInForce,
