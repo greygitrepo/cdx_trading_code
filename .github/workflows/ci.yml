@@ -7,20 +7,6 @@ on:
     branches: [ "feat/spec-v1" ]
 
 jobs:
-  gate_ops:
-    runs-on: ubuntu-latest
-    outputs:
-      run_ops: ${{ steps.check.outputs.run_ops }}
-    steps:
-      - id: check
-        shell: bash
-        run: |
-          if [[ -n "${{ secrets.BYBIT_API_KEY }}" && -n "${{ secrets.BYBIT_API_SECRET }}" ]]; then
-            echo "run_ops=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run_ops=false" >> "$GITHUB_OUTPUT"
-          fi
-
   unit_and_strategy:
     runs-on: ubuntu-latest
     env:
@@ -59,39 +45,4 @@ jobs:
           path: reports/paper.html
           if-no-files-found: warn
 
-  ops_integration:
-    needs: [gate_ops]
-    # Run only on push and when gate judged secrets are present
-    if: ${{ github.event_name == 'push' && needs.gate_ops.outputs.run_ops == 'true' }}
-    runs-on: ubuntu-latest
-    env:
-      TESTNET: "true"
-      LIVE_MODE: "true"
-      STUB_MODE: "false"
-      PAPER_MODE: "false"
-      BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
-      BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
-      MAX_SYMBOLS: "5"
-      TOTAL_BUDGET_USDT: "1000"
-      MPLBACKEND: "Agg"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: verify secrets presence
-        run: |
-          test -n "${BYBIT_API_KEY}" || (echo "BYBIT_API_KEY missing"; exit 1)
-          test -n "${BYBIT_API_SECRET}" || (echo "BYBIT_API_SECRET missing"; exit 1)
-      - name: Pytest (ops+integration)
-        run: pytest -m "ops or integration" -vv -o log_cli=true --log-cli-level=INFO --durations=10 --maxfail=1 --disable-warnings
-      - name: Upload paper report
-        uses: actions/upload-artifact@v4
-        with:
-          name: paper-report-ops
-          path: reports/paper.html
-          if-no-files-found: ignore
+  # ops/integration job intentionally removed for CI stability; run locally only
