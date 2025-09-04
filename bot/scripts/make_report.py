@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 
 def load_events(fp: Path) -> List[Dict[str, Any]]:
@@ -95,4 +95,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

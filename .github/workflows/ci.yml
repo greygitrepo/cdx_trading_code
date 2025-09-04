@@ -18,6 +18,8 @@ jobs:
       STUB_MODE: "true"
       PAPER_MODE: "true"
       LIVE_MODE: "false"
+      TESTNET: "false"
+      MPLBACKEND: "Agg"
 
     steps:
       - name: Checkout

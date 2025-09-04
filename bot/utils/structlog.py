@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Optional
@@ -68,4 +67,3 @@ def init_run_dir(base_logs: Path, run_id: str) -> Path:
     run_dir = base_logs / run_id
     _ensure_dir(run_dir)
     return run_dir
-
