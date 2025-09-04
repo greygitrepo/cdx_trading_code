@@ -120,88 +120,126 @@ def main() -> None:
     except BybitAPIError as e:
         logger.warning(f"Set leverage failed: {e}")
 
-    # 2) Get orderbook and infer mid price
-    ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
-    write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "orderbook", "data": ob.get("result", {})})
-    try:
-        bids = ob["result"]["b"]
-        asks = ob["result"]["a"]
-        best_bid = float(bids[0][0])
-        best_ask = float(asks[0][0])
-        mid = (best_bid + best_ask) / 2
-    except Exception:
-        logger.error("Failed to parse orderbook; aborting")
-        sys.exit(3)
-    logger.info(f"L1 mid={mid:.2f} for {symbol}")
+    # 2) Timed loop: signal -> order -> reflect -> cancel (smoke)
+    loop_interval = float(os.environ.get("LOOP_INTERVAL_SEC", "5"))
+    max_iters = int(os.environ.get("MAX_ITERS", "3"))
+    mids: list[float] = []
 
-    # 3) Build a dummy long signal (+1) plan
-    plan = build_order_plan(
-        signal=+1,
-        last_price=mid,
-        equity_usdt=equity,
-        symbol=symbol,
-        leverage=leverage,
-        price_tick=flt.get("tickSize"),
-        qty_step=flt.get("qtyStep"),
-        min_qty=flt.get("minOrderQty"),
-    )
-    logger.info(
-        f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
-    )
+    for i in range(max_iters):
+        ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
+        write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "orderbook", "data": ob.get("result", {})})
+        try:
+            bids = ob["result"]["b"]
+            asks = ob["result"]["a"]
+            best_bid = float(bids[0][0])
+            best_ask = float(asks[0][0])
+            bid_sz = float(bids[0][1]) if len(bids[0]) > 1 else 0.0
+            ask_sz = float(asks[0][1]) if len(asks[0]) > 1 else 0.0
+            mid = (best_bid + best_ask) / 2
+            spread = (best_ask - best_bid) / mid if mid > 0 else 0.0
+            obi = (bid_sz - ask_sz) / (bid_sz + ask_sz) if (bid_sz + ask_sz) > 0 else 0.0
+        except Exception:
+            logger.warning("Failed to parse orderbook; skipping iteration")
+            time.sleep(loop_interval)
+            continue
+        mids.append(mid)
+        if len(mids) > 50:
+            mids.pop(0)
+        logger.info(f"[{i+1}/{max_iters}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}")
 
-    # Risk checks
-    ok, reason = check_balance_guard(RiskContext(equity_usdt=equity, free_usdt=free, symbol=symbol, last_mid=mid))
-    if not ok:
-        logger.warning(f"Risk blocked (balance): {reason}")
-        return
-    notional = plan.qty * mid  # linear USDT perp approx
-    ok, reason = check_order_size(notional, equity)
-    if not ok:
-        logger.warning(f"Risk blocked (size): {reason}")
-        return
-    if plan.order_type == "Limit" and plan.price is not None:
-        ok, reason = slippage_guard(plan.price, mid)
-        if not ok:
-            logger.warning(f"Risk blocked (slippage): {reason}")
-            return
+        # 3) Simple MIS-like signal via orderbook imbalance
+        signal = 0
+        if obi >= 0.60:
+            signal = +1
+        elif obi <= -0.60:
+            signal = -1
+        else:
+            logger.info("No strong signal; sleeping")
+            time.sleep(loop_interval)
+            continue
 
-    if dry_run:
-        logger.info("DRY_RUN=true; skipping actual order placement")
-        return
-
-    # 4) Place order then cancel for smoke test
-    try:
-        res = client.place_order(
-            symbol=plan.symbol,
-            side=plan.side,
-            qty=str(round(plan.qty, 6)),
-            orderType=plan.order_type,
-            timeInForce=plan.tif,
-            price=str(plan.price) if plan.price is not None else None,
-            orderLinkId=plan.order_link_id,
-            takeProfit=str(plan.tp) if plan.tp else None,
-            stopLoss=str(plan.sl) if plan.sl else None,
+        prefer_limit = spread <= 0.0005
+        plan = build_order_plan(
+            signal=signal,
+            last_price=mid,
+            equity_usdt=equity,
+            symbol=symbol,
+            leverage=leverage,
+            price_tick=flt.get("tickSize"),
+            qty_step=flt.get("qtyStep"),
+            min_qty=flt.get("minOrderQty"),
+            prefer_limit=prefer_limit,
+            post_only=prefer_limit,
         )
-        write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_create", "data": res})
-        logger.info("Order placed")
-    except BybitAPIError as e:
-        logger.error(f"Place order failed: {e}")
-        return
+        logger.info(
+            f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
+        )
 
-    # Fetch open orders
-    try:
-        oo = client.get_open_orders(symbol=symbol)
-        write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "open_orders", "data": oo})
-    except BybitAPIError as e:
-        logger.warning(f"Open orders fetch failed: {e}")
+        # Risk checks
+        ok, reason = check_balance_guard(RiskContext(equity_usdt=equity, free_usdt=free, symbol=symbol, last_mid=mid))
+        if not ok:
+            logger.warning(f"Risk blocked (balance): {reason}")
+            break
+        notional = plan.qty * mid
+        ok, reason = check_order_size(notional, equity)
+        if not ok:
+            logger.warning(f"Risk blocked (size): {reason}")
+            time.sleep(loop_interval)
+            continue
+        if plan.order_type == "Limit" and plan.price is not None:
+            ok, reason = slippage_guard(plan.price, mid)
+            if not ok:
+                logger.warning(f"Risk blocked (slippage): {reason}")
+                time.sleep(loop_interval)
+                continue
 
-    # Cancel by orderLinkId
-    try:
-        cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
-        write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_cancel", "data": cres})
-        logger.info("Order cancel sent")
-    except BybitAPIError as e:
-        logger.error(f"Cancel failed: {e}")
+        if dry_run:
+            logger.info("DRY_RUN=true; skipping actual order placement this iteration")
+            time.sleep(loop_interval)
+            continue
+
+        # 4) Place order and then cancel for smoke
+        try:
+            res = client.place_order(
+                symbol=plan.symbol,
+                side=plan.side,
+                qty=str(round(plan.qty, 6)),
+                orderType=plan.order_type,
+                timeInForce=plan.tif,
+                price=str(plan.price) if plan.price is not None else None,
+                orderLinkId=plan.order_link_id,
+                takeProfit=str(plan.tp) if plan.tp else None,
+                stopLoss=str(plan.sl) if plan.sl else None,
+            )
+            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_create", "data": res})
+            logger.info("Order placed")
+        except BybitAPIError as e:
+            logger.error(f"Place order failed: {e}")
+            time.sleep(loop_interval)
+            continue
+
+        # Reflect open orders and positions
+        try:
+            oo = client.get_open_orders(symbol=symbol)
+            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "open_orders", "data": oo})
+        except BybitAPIError as e:
+            logger.warning(f"Open orders fetch failed: {e}")
+
+        try:
+            pos = client.get_positions(category=category, symbol=symbol)
+            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "positions", "data": pos})
+        except BybitAPIError as e:
+            logger.warning(f"Positions fetch failed: {e}")
+
+        # Try to cancel by orderLinkId for smoke
+        try:
+            cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
+            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_cancel", "data": cres})
+            logger.info("Order cancel sent")
+        except BybitAPIError as e:
+            logger.error(f"Cancel failed: {e}")
+
+        time.sleep(loop_interval)
 
 
 if __name__ == "__main__":
