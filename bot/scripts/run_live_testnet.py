@@ -82,8 +82,9 @@ def require_env_flags(logger: logging.Logger) -> None:
         "TESTNET": os.environ.get("TESTNET", "true").lower(),
     }
     logger.info(f"Env flags: {flags}")
-    if not (flags["LIVE_MODE"] == "true" and flags["TESTNET"] == "true"):
-        logger.warning("LIVE_MODE must be true and TESTNET true for this script")
+    if flags["LIVE_MODE"] != "true" or flags["TESTNET"] != "true":
+        logger.error("Safety check: run_live_testnet requires LIVE_MODE=true and TESTNET=true. Exiting.")
+        sys.exit(1)
 
 
 def _load_dotenv_if_present() -> int:
@@ -196,7 +197,10 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Profile load failed: {e}")
     require_env_flags(logger)
-    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    # Safety: default DRY_RUN=true unless explicitly false
+    if "DRY_RUN" not in os.environ:
+        os.environ["DRY_RUN"] = "true"
+    dry_run = os.environ.get("DRY_RUN", "true").lower() == "true"
 
     client = BybitV5Client()
     symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
