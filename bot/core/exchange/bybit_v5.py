@@ -177,6 +177,10 @@ class BybitV5Client:
         params = {"category": category or self.default_category}
         return self._request("GET", "/v5/market/instruments-info", params=params, auth=False)
 
+    # Backward/explicit alias per spec
+    def get_instruments(self, category: Optional[str] = None) -> Dict[str, Any]:
+        return self.get_symbols(category=category)
+
     def get_orderbook(self, symbol: str, depth: int = 1, category: Optional[str] = None) -> Dict[str, Any]:
         params = {
             "category": category or self.default_category,
@@ -263,6 +267,40 @@ class BybitV5Client:
     def get_wallet_balance(self, *, accountType: str = "UNIFIED", coin: Optional[str] = None) -> Dict[str, Any]:
         params = {"accountType": accountType, "coin": coin}
         return self._request("GET", "/v5/account/wallet-balance", params=params, auth=True)
+
+    def set_leverage(self, *, symbol: str, buyLeverage: int | float, sellLeverage: int | float,
+                     category: Optional[str] = None) -> Dict[str, Any]:
+        payload = {
+            "category": category or self.default_category,
+            "symbol": symbol,
+            "buyLeverage": str(buyLeverage),
+            "sellLeverage": str(sellLeverage),
+        }
+        return self._request("POST", "/v5/position/set-leverage", data=payload, auth=True)
+
+    # -------- Instrument utilities --------
+    @staticmethod
+    def extract_symbol_filters(resp: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+        """Extract tickSize/qtyStep/minQty style filters from instruments-info response.
+
+        Returns keys: tickSize, qtyStep, minOrderQty (if available), lotSizeFilter, priceFilter
+        """
+        try:
+            items = resp.get("result", {}).get("list", [])
+            for it in items:
+                if it.get("symbol") == symbol:
+                    pf = it.get("priceFilter", {})
+                    lf = it.get("lotSizeFilter", {})
+                    return {
+                        "tickSize": float(pf.get("tickSize")) if pf.get("tickSize") is not None else None,
+                        "qtyStep": float(lf.get("qtyStep")) if lf.get("qtyStep") is not None else None,
+                        "minOrderQty": float(lf.get("minOrderQty")) if lf.get("minOrderQty") is not None else None,
+                        "priceFilter": pf,
+                        "lotSizeFilter": lf,
+                    }
+        except Exception:
+            pass
+        return {"tickSize": None, "qtyStep": None, "minOrderQty": None}
 
     # -------- Utilities --------
     def close(self) -> None:

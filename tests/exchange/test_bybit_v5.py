@@ -93,3 +93,36 @@ def test_positions_requires_symbol_or_settlecoin():
     except ValueError:
         pass
 
+
+def test_get_instruments_alias(monkeypatch):
+    client = BybitV5Client(api_key="k", api_secret="s", testnet=True)
+    seen = {}
+
+    def _fake_request(method, path, params=None, data=None, auth=False, max_retries=3):
+        seen.update({"method": method, "path": path, "params": params, "auth": auth})
+        return {"retCode": 0, "retMsg": "OK", "result": {"list": []}}
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+    client.get_instruments(category="linear")
+    assert seen["method"] == "GET"
+    assert seen["path"] == "/v5/market/instruments-info"
+    assert seen["params"]["category"] == "linear"
+    assert seen["auth"] is False
+
+
+def test_set_leverage_payload(monkeypatch):
+    client = BybitV5Client(api_key="k", api_secret="s", testnet=True)
+    sent = {}
+
+    def _fake_request(method, path, params=None, data=None, auth=False, max_retries=3):
+        sent.update({"method": method, "path": path, "data": data, "auth": auth})
+        return {"retCode": 0, "retMsg": "OK", "result": {}}
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+    client.set_leverage(symbol="BTCUSDT", buyLeverage=10, sellLeverage=10, category="linear")
+    assert sent["method"] == "POST"
+    assert sent["path"] == "/v5/position/set-leverage"
+    assert sent["auth"] is True
+    assert sent["data"]["symbol"] == "BTCUSDT"
+    assert sent["data"]["buyLeverage"] == "10"
+    assert sent["data"]["sellLeverage"] == "10"

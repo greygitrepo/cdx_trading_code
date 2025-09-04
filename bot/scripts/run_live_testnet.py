@@ -79,6 +79,7 @@ def main() -> None:
     client = BybitV5Client()
     symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
     category = os.environ.get("BYBIT_CATEGORY", "linear")
+    leverage = float(os.environ.get("LEVERAGE", "10"))
 
     # 1) API key validation
     try:
@@ -102,6 +103,23 @@ def main() -> None:
         pass
     logger.info(f"Equity={equity:.2f} USDT, Free={free:.2f} USDT")
 
+    # 1.5) Load instrument filters & set leverage
+    try:
+        ins = client.get_instruments(category=category)
+        flt = client.extract_symbol_filters(ins, symbol)
+        logger.info(
+            f"Instrument filters for {symbol}: tickSize={flt.get('tickSize')} qtyStep={flt.get('qtyStep')} minQty={flt.get('minOrderQty')}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to fetch instrument filters: {e}")
+        flt = {"tickSize": None, "qtyStep": None, "minOrderQty": None}
+
+    try:
+        sr = client.set_leverage(symbol=symbol, buyLeverage=int(leverage), sellLeverage=int(leverage), category=category)
+        logger.info("Leverage set OK")
+    except BybitAPIError as e:
+        logger.warning(f"Set leverage failed: {e}")
+
     # 2) Get orderbook and infer mid price
     ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
     write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "orderbook", "data": ob.get("result", {})})
@@ -117,7 +135,16 @@ def main() -> None:
     logger.info(f"L1 mid={mid:.2f} for {symbol}")
 
     # 3) Build a dummy long signal (+1) plan
-    plan = build_order_plan(signal=+1, last_price=mid, equity_usdt=equity, symbol=symbol)
+    plan = build_order_plan(
+        signal=+1,
+        last_price=mid,
+        equity_usdt=equity,
+        symbol=symbol,
+        leverage=leverage,
+        price_tick=flt.get("tickSize"),
+        qty_step=flt.get("qtyStep"),
+        min_qty=flt.get("minOrderQty"),
+    )
     logger.info(
         f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
     )
@@ -179,4 +206,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

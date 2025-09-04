@@ -35,6 +35,13 @@ class OrderPlan:
     sl: Optional[float]
 
 
+def _round_to_step(value: float, step: Optional[float]) -> float:
+    if not step or step <= 0:
+        return value
+    # Floor to the nearest step to avoid over-precision
+    return (int(value / step)) * step
+
+
 def build_order_plan(
     *,
     signal: int,
@@ -47,6 +54,10 @@ def build_order_plan(
     sl_pct: float = 0.002,
     prefer_limit: bool = False,
     post_only: bool = False,
+    # optional exchange filters for precision/limits
+    price_tick: Optional[float] = None,
+    qty_step: Optional[float] = None,
+    min_qty: Optional[float] = None,
 ) -> OrderPlan:
     """Build an order plan from a directional signal.
 
@@ -62,10 +73,16 @@ def build_order_plan(
     notional = max_notional
     # Linear USDT perps: qty = notional * leverage / price
     qty = max(0.0, (notional * lev) / max(last_price, 1e-9))
+    # Apply precision/limits if provided
+    if qty_step:
+        qty = _round_to_step(qty, qty_step)
+    if min_qty and qty < min_qty:
+        qty = min_qty
 
     if prefer_limit:
         # Place passively one tick inside best bid/ask approximation
-        price = last_price * (0.9995 if side == "BUY" else 1.0005)
+        raw_price = last_price * (0.9995 if side == "BUY" else 1.0005)
+        price = _round_to_step(raw_price, price_tick)
         tif = "PostOnly" if post_only else "GTC"
         order_type = "Limit"
     else:
