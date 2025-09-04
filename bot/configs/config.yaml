@@ -2,23 +2,23 @@ exchange:
   name: bybit
   network: testnet
   category: linear
-  symbols: [BTCUSDT]
+  symbols: [BTCUSDT, ETHUSDT, SOLUSDT, DOGEUSDT]  # BTC 단일 → 유동성 상위 확장
   prefer_maker_bps_threshold: 0.04
   maker_post_only: true
   taker_on_strong_score: true
   fallback_ioc: true
 
 risk:
-  max_leverage: 10
-  risk_per_trade_min: 0.003
-  risk_per_trade_max: 0.006
-  daily_max_loss: 0.02
-  per_symbol_concentration: 0.40
+  max_leverage: 7                  # 10 → 7
+  risk_per_trade_min: 0.002        # 0.2%
+  risk_per_trade_max: 0.005        # 0.5%
+  daily_max_loss: 0.015            # 2% → 1.5% 데일리 컷
+  per_symbol_concentration: 0.30   # 40% → 30%
 
 params:
   universe:
     topN: 12
-    spread_max_mult: 1.5
+    spread_max_mult: 1.4           # 1.5 → 1.4 (스프레드 관리 강화)
     depth_drop_pause: 0.70
     vwap_dev_for_vrs: 0.0035
   regime:
@@ -34,19 +34,29 @@ params:
     ema_slow: 9
     adx_len: 7
     keltner_len: 20
-    keltner_mult: 1.25
-    rsi2_low: 4
-    rsi2_high: 96
+    keltner_mult: 1.40             # 1.25 → 1.40 (노이즈 완화)
+    rsi2_low: 5                     # 4 → 5
+    rsi2_high: 95                   # 96 → 95
+    # 상위TF 바이어스(코드가 지원하면 적용): 5m EMA 50/200
+    htf_bias:
+      timeframe: "5m"
+      ema_fast: 50
+      ema_slow: 200
+      bias_only: true               # 바이어스 반대 진입 금지
+
   orderbook:
     obi_window_ms: 1500
     obi_threshold_mis: 0.60
-    min_depth_usd: 15000
+    min_depth_usd: 50000           # 15000 → 50000
+
   entry_exit:
-    tp1: 0.0010
+    tp1: 0.0012                     # 0.10% → 0.12%
     trail_after_tp1: 0.0008
-    time_stop_mis: "30-40"
-    time_stop_vrs: "20-30"
-    time_stop_lsr: "15-25"
+    # 타임스탑을 전략별로 단축(분포를 좁혀 빠른 손절·정리)
+    time_stop_mis: "15-25"          # "30-40" → "15-25"
+    time_stop_vrs: "10-20"          # "20-30" → "10-20"
+    time_stop_lsr: "8-15"           # "15-25" → "8-15"
+
   funding_time:
     avoid_taker_within_min: 5
 
