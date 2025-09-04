@@ -7,6 +7,20 @@ on:
     branches: [ "feat/spec-v1" ]
 
 jobs:
+  gate_ops:
+    runs-on: ubuntu-latest
+    outputs:
+      run_ops: ${{ steps.check.outputs.run_ops }}
+    steps:
+      - id: check
+        shell: bash
+        run: |
+          if [[ -n "${{ secrets.BYBIT_API_KEY }}" && -n "${{ secrets.BYBIT_API_SECRET }}" ]]; then
+            echo "run_ops=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_ops=false" >> "$GITHUB_OUTPUT"
+          fi
+
   unit_and_strategy:
     runs-on: ubuntu-latest
     env:
@@ -46,8 +60,9 @@ jobs:
           if-no-files-found: warn
 
   ops_integration:
-    # Run only on push in this repo and only when BYBIT secrets are present
-    if: ${{ github.event_name == 'push' && secrets.BYBIT_API_KEY != '' && secrets.BYBIT_API_SECRET != '' }}
+    needs: [gate_ops]
+    # Run only on push and when gate judged secrets are present
+    if: ${{ github.event_name == 'push' && needs.gate_ops.outputs.run_ops == 'true' }}
     runs-on: ubuntu-latest
     env:
       TESTNET: "true"
