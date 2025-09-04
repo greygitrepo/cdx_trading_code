@@ -1,0 +1,42 @@
+exchange:
+  name: bybit
+  network: testnet
+  category: linear
+  # 유동성 상위 소수 심볼로 빠른 검증
+  symbols: [BTCUSDT, ETHUSDT]
+  prefer_maker_bps_threshold: 0.04
+  # Quick-Test 핵심: 체결 우선
+  maker_post_only: false
+  taker_on_strong_score: true
+  fallback_ioc: true
+
+risk:
+  max_leverage: 7
+
+params:
+  universe:
+    topN: 6
+    spread_max_mult: 1.6
+    depth_drop_pause: 0.60
+  regime:
+    spread_mult_pause: 2.0
+  indicators:
+    keltner_len: 20
+    keltner_mult: 1.25
+    rsi2_low: 8
+    rsi2_high: 92
+    htf_bias:
+      enabled: false
+
+  orderbook:
+    min_depth_usd: 2000
+
+  entry_exit:
+    tp1: 0.0010   # 0.10%
+    sl: 0.0012    # 0.12%
+    time_stop_sec: 480  # 8분
+
+execution:
+  slippage_guard_pct: 0.0015
+  consensus_ticks: 2
+  loop_interval_sec: 2

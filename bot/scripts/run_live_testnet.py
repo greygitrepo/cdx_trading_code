@@ -23,6 +23,8 @@ import sys
 import time
 from pathlib import Path as _P
 from typing import Any
+import argparse
+import datetime as _dt
 
 # Ensure repo root on path
 _ROOT = _P(__file__).resolve().parents[2]
@@ -35,14 +37,19 @@ from bot.core.strategy_runner import build_order_plan  # noqa: E402
 from bot.core.strategies import StrategyParams, mis_signal, vrs_signal, lsr_signal, select_strategy  # noqa: E402
 from bot.core.indicators import Rolling  # noqa: E402
 from bot.core.rotation import build_universe, ExitFlag  # noqa: E402
+from bot.utils.structlog import StructLogger, init_run_dir  # noqa: E402
+import yaml  # type: ignore  # noqa: E402
 try:
     from bot.core.exchange.bybit_ws import BybitPrivateWS  # type: ignore # noqa: E402
 except Exception:  # noqa: BLE001
     BybitPrivateWS = None  # type: ignore
 
 
-def setup_loggers() -> tuple[logging.Logger, _P]:
-    logs_dir = _P("logs/live_testnet")
+def setup_loggers(run_id: str) -> tuple[logging.Logger, _P]:
+    base_logs = _P("logs")
+    base_logs.mkdir(parents=True, exist_ok=True)
+    # Run-scoped directory
+    logs_dir = init_run_dir(base_logs, run_id)
     logs_dir.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("live_testnet")
     logger.setLevel(logging.INFO)
@@ -61,6 +68,7 @@ def setup_loggers() -> tuple[logging.Logger, _P]:
 
 
 def write_event(logs_dir: _P, event: dict[str, Any]) -> None:
+    # Back-compat raw writer (kept if external callers rely on it)
     fp = logs_dir / "events.jsonl"
     with fp.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -78,8 +86,44 @@ def require_env_flags(logger: logging.Logger) -> None:
         logger.warning("LIVE_MODE must be true and TESTNET true for this script")
 
 
+def _apply_profile_env(profile: str) -> None:
+    if profile == "quick-test":
+        # Apply minimal env overrides for quick fills
+        os.environ.setdefault("PREFER_LIMIT_DEFAULT", "false")
+        os.environ.setdefault("MAKER_POST_ONLY", "false")
+        os.environ.setdefault("FALLBACK_IOC", "true")
+        os.environ.setdefault("SLIPPAGE_GUARD_PCT", "0.0015")
+        os.environ.setdefault("CONSENSUS_TICKS", "2")
+        os.environ.setdefault("MIN_DEPTH_USD", "2000")
+        os.environ.setdefault("TP_PCT", "0.0010")
+        os.environ.setdefault("SL_PCT", "0.0012")
+        os.environ.setdefault("TIME_STOP_SEC", "480")
+        os.environ.setdefault("NO_TRADE_SLEEP_SEC", "2")
+
+
 def main() -> None:
-    logger, logs_dir = setup_loggers()
+    # CLI
+    parser = argparse.ArgumentParser(description="Run Bybit v5 live testnet loop")
+    parser.add_argument("--profile", default=os.environ.get("PROFILE", ""), help="profile name (e.g., quick-test)")
+    args = parser.parse_args()
+
+    # Run ID and loggers
+    run_id = f"run_{_dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    logger, logs_dir = setup_loggers(run_id)
+    slog = StructLogger(logs_dir, run_id)
+    require_env_flags(logger)
+    # Load profile config if requested
+    if args.profile:
+        try:
+            if args.profile == "quick-test":
+                qpath = _P("bot/configs/quick_test.yaml")
+                if qpath.exists():
+                    with qpath.open("r", encoding="utf-8") as f:
+                        _ = yaml.safe_load(f)  # reserved for future deep merge
+                _apply_profile_env("quick-test")
+                logger.info("Applied quick-test profile overrides")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Profile load failed: {e}")
     require_env_flags(logger)
     dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
 
@@ -120,7 +164,7 @@ def main() -> None:
     try:
         wb = client.get_wallet_balance()
         logger.info("Wallet balance call OK: retCode=0")
-        write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "wallet_balance", "data": wb.get("result", {})})
+        slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="wallet_balance", payload=wb.get("result", {}))
     except BybitAPIError as e:
         logger.error(f"Wallet balance failed: {e}")
         sys.exit(2)
@@ -141,12 +185,13 @@ def main() -> None:
     # Build symbol universe
     uni = build_universe(client)
     logger.info(f"Universe: {len(uni.symbols)} symbols ({'discovered' if uni.discovered else 'static'}) -> {uni.symbols}")
+    slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="universe", payload={"symbols": uni.symbols, "discovered": uni.discovered})
 
     # Optional: start private WS for live event logging
     ws = None
     if enable_ws and BybitPrivateWS is not None:
         def _on_ws_msg(msg: dict[str, Any]) -> None:
-            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "ws", "data": msg})
+            slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="ws", payload=msg)
 
         def _on_ws_err(err: Exception) -> None:
             logger.warning(f"WS error: {err}")
@@ -200,7 +245,7 @@ def main() -> None:
             if exit_flag.check():
                 break
             ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
-        write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "orderbook", "data": ob.get("result", {})})
+        slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="orderbook", payload=ob.get("result", {}))
         try:
             bids = ob["result"]["b"]
             asks = ob["result"]["a"]
@@ -240,12 +285,14 @@ def main() -> None:
         strat_name, strat_side = select_strategy(mis, vrs, lsr)
         if strat_name is None or strat_side is None:
             logger.info("No strategy consensus; sleeping")
+            slog.log_signal(ts=int(time.time() * 1000), symbol=symbol, scores={"mis": mis, "vrs": vrs, "lsr": lsr}, decision=None)
             time.sleep(loop_interval)
             continue
         signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
         logger.info(f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal>0 else 'SELL')}")
+        slog.log_signal(ts=int(time.time() * 1000), symbol=symbol, scores={"mis": mis, "vrs": vrs, "lsr": lsr}, decision=f"{strat_name}:{'BUY' if signal>0 else 'SELL'}")
 
-        prefer_limit = spread <= 0.0005
+        prefer_limit = spread <= 0.0005 and _env_bool("PREFER_LIMIT_DEFAULT", True)
         # Avoid taker near funding if configured and nextFundingTime is close
         try:
             avoid_min = _env_float("AVOID_TAKER_WITHIN_MIN", 5.0)
@@ -272,28 +319,40 @@ def main() -> None:
             qty_step=flt.get("qtyStep"),
             min_qty=flt.get("minOrderQty"),
             prefer_limit=prefer_limit,
-            post_only=prefer_limit,
+            post_only=prefer_limit and _env_bool("MAKER_POST_ONLY", True),
             fixed_notional_usdt=(fixed_notional if fixed_notional > 0 else None),
         )
         logger.info(
             f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
         )
+        slog.log_order(ts=int(time.time() * 1000), symbol=symbol, plan={
+            "side": plan.side,
+            "qty": plan.qty,
+            "order_type": plan.order_type,
+            "tif": plan.tif,
+            "price": plan.price,
+            "tp": plan.tp,
+            "sl": plan.sl,
+        })
 
         # Risk checks
         ok, reason = check_balance_guard(RiskContext(equity_usdt=equity, free_usdt=free, symbol=symbol, last_mid=mid))
         if not ok:
             logger.warning(f"Risk blocked (balance): {reason}")
+            slog.log_risk(ts=int(time.time() * 1000), symbol=symbol, ok=False, reason=reason, context={"stage": "balance_guard"})
             break
         notional = plan.qty * mid
         ok, reason = check_order_size(notional, equity)
         if not ok:
             logger.warning(f"Risk blocked (size): {reason}")
+            slog.log_risk(ts=int(time.time() * 1000), symbol=symbol, ok=False, reason=reason, context={"stage": "order_size"})
             time.sleep(loop_interval)
             continue
         if plan.order_type == "Limit" and plan.price is not None:
             ok, reason = slippage_guard(plan.price, mid)
             if not ok:
                 logger.warning(f"Risk blocked (slippage): {reason}")
+                slog.log_risk(ts=int(time.time() * 1000), symbol=symbol, ok=False, reason=reason, context={"stage": "slippage_guard"})
                 time.sleep(loop_interval)
                 continue
 
@@ -315,7 +374,16 @@ def main() -> None:
                 takeProfit=str(plan.tp) if plan.tp else None,
                 stopLoss=str(plan.sl) if plan.sl else None,
             )
-            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_create", "data": res})
+            slog.log_order(ts=int(time.time() * 1000), symbol=symbol, plan={
+                "side": plan.side,
+                "qty": plan.qty,
+                "order_type": plan.order_type,
+                "tif": plan.tif,
+                "price": plan.price,
+                "tp": plan.tp,
+                "sl": plan.sl,
+                "order_link_id": plan.order_link_id,
+            }, result=res)
             logger.info("Order placed")
             traded = True
         except BybitAPIError as e:
@@ -326,13 +394,13 @@ def main() -> None:
         # Reflect open orders and positions
         try:
             oo = client.get_open_orders(symbol=symbol)
-            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "open_orders", "data": oo})
+            slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="open_orders", payload=oo)
         except BybitAPIError as e:
             logger.warning(f"Open orders fetch failed: {e}")
 
         try:
             pos = client.get_positions(category=category, symbol=symbol)
-            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "positions", "data": pos})
+            slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="positions", payload=pos)
             # Time stop and trailing if position present
             plist = pos.get("result", {}).get("list", [])
             if plist:
@@ -370,6 +438,7 @@ def main() -> None:
                             side = "SELL" if side_long else "BUY"
                             client.close_position_market(symbol=symbol, side=side, qty=str(qty), category=category)
                             logger.info(f"Time stop triggered after {held_sec}s; closing position")
+                            slog.log_pnl(ts=int(time.time() * 1000), symbol=symbol, realized=0.0, unrealized=None)
                         except BybitAPIError as e:
                             logger.warning(f"Time stop close failed: {e}")
         except BybitAPIError as e:
@@ -378,7 +447,7 @@ def main() -> None:
         # Try to cancel by orderLinkId for smoke
         try:
             cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
-            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_cancel", "data": cres})
+            slog.log_cancel(ts=int(time.time() * 1000), symbol=symbol, order_link_id=plan.order_link_id, reason="rotate_or_smoke")
             logger.info("Order cancel sent")
         except BybitAPIError as e:
             logger.error(f"Cancel failed: {e}")

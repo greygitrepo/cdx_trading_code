@@ -55,7 +55,7 @@ Safety and notes
 - Secrets: only read from environment; do not commit `.env`.
 - Rate limit: built-in exponential backoff on 429/selected `retCode`s with retries.
 - Resilience: idempotency via `orderLinkId` on order placement.
-- Logging: structured JSONL events under `logs/live_testnet/events.jsonl` and a rotating `app.log`.
+- Logging: structured JSONL events under `logs/run_*/events.jsonl` and a rotating `app.log`.
 - Optional WS: set `ENABLE_PRIVATE_WS=true` and install `websocket-client` to stream private `order/execution/position` events into JSONL.
 
 Env highlights
@@ -75,3 +75,29 @@ Env highlights
 - Parameter pack: `bot/configs/params_gumiho.yaml`
 You can load/validate them via `bot.configs.schemas.load_app_config` and `load_params`.
 - Universe/Rotation: `SYMBOL_UNIVERSE`, `DISCOVER_SYMBOLS`, `UNIVERSE_TOP_N`, `CONSENSUS_TICKS`, `NO_TRADE_SLEEP_SEC`, `LOOP_IDLE_SEC`, `EXIT_KEY`, `ORDER_SIZE_USDT`
+
+### Quick-Test Profile (fast testnet fills)
+
+To quickly validate live wiring and generate reports with several fills on testnet:
+
+1) Run with the quick-test profile
+
+```
+python bot/scripts/run_live_testnet.py --profile quick-test
+```
+
+This applies relaxed filters and taker-friendly routing:
+- maker_post_only=false, taker_on_strong_score=true, fallback_ioc=true
+- MIN_DEPTH_USD≈2000, SLIPPAGE_GUARD_PCT≈0.0015, CONSENSUS_TICKS≈2
+- More frequent signals: keltner_mult≈1.25, rsi2_low≈8, rsi2_high≈92, htf_bias.disabled
+- RR: TP≈0.10%, SL≈0.12%, TIME_STOP≈8m
+
+2) Generate a report
+
+```
+python bot/scripts/make_report.py --run_id <run_id>
+```
+
+The HTML report is saved to `reports/quick_test_<run_id>.html` with fill rate, slippage estimate, and basic summaries.
+
+Note: Before real trading, revert to conservative settings or omit `--profile quick-test`.
