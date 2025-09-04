@@ -44,6 +44,11 @@ class BybitAPIError(Exception):
         self.data = data
 
 
+class EdgeProtectionError(BybitAPIError):
+    """Raised when Bybit public edge returns HTML/non-JSON (403/5xx) after retries."""
+    pass
+
+
 class BybitV5Client:
     def __init__(
         self,
@@ -177,7 +182,7 @@ class BybitV5Client:
                 attempt += 1
                 continue
 
-            # Attempt to parse JSON; if not JSON, raise a clear API error with snippet
+            # Attempt to parse JSON; if not JSON, handle potential HTML edge protections
             try:
                 j = resp.json()
             except Exception:
@@ -189,6 +194,17 @@ class BybitV5Client:
                 snippet = (body or "")[:200]
                 status = resp.status_code
                 hdrs = dict(resp.headers)
+                # Retry on common edge-protection statuses (HTML/non-JSON)
+                if status in {403, 502, 520, 521} and attempt < max_retries:
+                    time.sleep(2**attempt)
+                    attempt += 1
+                    continue
+                if status in {403, 502, 520, 521}:
+                    raise EdgeProtectionError(
+                        status,
+                        f"HTTP {status} non-JSON at {path}: {snippet}",
+                        {"status": status, "headers": hdrs, "body": snippet},
+                    )
                 raise BybitAPIError(
                     status,
                     f"HTTP {status} non-JSON response: {snippet}",
