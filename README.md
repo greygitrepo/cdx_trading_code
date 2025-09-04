@@ -27,6 +27,24 @@ python bot/scripts/run_paper.py
 ```
 Report is written to `reports/paper.html`.
 
+## Development
+
+- Python 3.10/3.11
+- Install deps: `pip install -r requirements.txt`
+- Lint/format: `ruff format . && ruff check .`
+- Run tests: `pytest -q -m "unit or strategy"`
+
+### Pre-commit (recommended)
+
+Install pre-commit to run Ruff automatically before commit:
+
+```
+pip install pre-commit
+pre-commit install
+```
+
+Hooks run `ruff --fix` and `ruff format` on changed files.
+
 ## Quickstart (Live Testnet)
 - Install deps and prepare an `.env` from `.env.sample` with your Bybit testnet API keys (never commit secrets).
 - Ensure env toggles:

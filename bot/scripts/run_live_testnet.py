@@ -26,19 +26,50 @@ from typing import Any
 import argparse
 import datetime as _dt
 
-# Ensure repo root on path
-_ROOT = _P(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+try:
+    from bot.core.exchange.bybit_v5 import BybitV5Client, BybitAPIError
+    from bot.core.execution.risk_rules import (
+        RiskContext,
+        check_balance_guard,
+        check_order_size,
+        slippage_guard,
+    )
+    from bot.core.strategy_runner import build_order_plan
+    from bot.core.strategies import (
+        StrategyParams,
+        mis_signal,
+        vrs_signal,
+        lsr_signal,
+        select_strategy,
+    )
+    from bot.core.indicators import Rolling
+    from bot.core.rotation import build_universe, ExitFlag
+    from bot.utils.structlog import StructLogger, init_run_dir
+except Exception:  # pragma: no cover - fallback for direct script runs
+    _ROOT = _P(__file__).resolve().parents[2]
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    from bot.core.exchange.bybit_v5 import BybitV5Client, BybitAPIError
+    from bot.core.execution.risk_rules import (
+        RiskContext,
+        check_balance_guard,
+        check_order_size,
+        slippage_guard,
+    )
+    from bot.core.strategy_runner import build_order_plan
+    from bot.core.strategies import (
+        StrategyParams,
+        mis_signal,
+        vrs_signal,
+        lsr_signal,
+        select_strategy,
+    )
+    from bot.core.indicators import Rolling
+    from bot.core.rotation import build_universe, ExitFlag
+    from bot.utils.structlog import StructLogger, init_run_dir
 
-from bot.core.exchange.bybit_v5 import BybitV5Client, BybitAPIError  # noqa: E402
-from bot.core.execution.risk_rules import RiskContext, check_balance_guard, check_order_size, slippage_guard  # noqa: E402
-from bot.core.strategy_runner import build_order_plan  # noqa: E402
-from bot.core.strategies import StrategyParams, mis_signal, vrs_signal, lsr_signal, select_strategy  # noqa: E402
-from bot.core.indicators import Rolling  # noqa: E402
-from bot.core.rotation import build_universe, ExitFlag  # noqa: E402
-from bot.utils.structlog import StructLogger, init_run_dir  # noqa: E402
-import yaml  # type: ignore  # noqa: E402
+import yaml  # type: ignore
+
 try:
     from bot.core.exchange.bybit_ws import BybitPrivateWS  # type: ignore # noqa: E402
 except Exception:  # noqa: BLE001
@@ -83,7 +114,9 @@ def require_env_flags(logger: logging.Logger) -> None:
     }
     logger.info(f"Env flags: {flags}")
     if flags["LIVE_MODE"] != "true" or flags["TESTNET"] != "true":
-        logger.error("Safety check: run_live_testnet requires LIVE_MODE=true and TESTNET=true. Exiting.")
+        logger.error(
+            "Safety check: run_live_testnet requires LIVE_MODE=true and TESTNET=true. Exiting."
+        )
         sys.exit(1)
 
 
@@ -118,7 +151,9 @@ def _load_dotenv_if_present() -> int:
 def _apply_profile_env(profile: str) -> None:
     # Load overlay YAML and map key settings to envs the runner uses.
     # Priority: CLI overrides > profile overlay > base env
-    prof_path = _P(f"bot/configs/profiles/{'quick_test' if profile=='quick-test' else profile}.yaml")
+    prof_path = _P(
+        f"bot/configs/profiles/{'quick_test' if profile == 'quick-test' else profile}.yaml"
+    )
     if not prof_path.exists():
         return
     with prof_path.open("r", encoding="utf-8") as f:
@@ -127,7 +162,9 @@ def _apply_profile_env(profile: str) -> None:
     # Exchange/network
     net = (cfg.get("exchange", {}) or {}).get("network")
     if net:
-        os.environ.setdefault("TESTNET", "true" if str(net).lower() == "testnet" else "false")
+        os.environ.setdefault(
+            "TESTNET", "true" if str(net).lower() == "testnet" else "false"
+        )
     maker_post = (cfg.get("exchange", {}) or {}).get("maker_post_only")
     if maker_post is not None:
         os.environ.setdefault("MAKER_POST_ONLY", str(bool(maker_post)).lower())
@@ -172,7 +209,11 @@ def _apply_profile_env(profile: str) -> None:
 def main() -> None:
     # CLI
     parser = argparse.ArgumentParser(description="Run Bybit v5 live testnet loop")
-    parser.add_argument("--profile", default=os.environ.get("PROFILE", ""), help="profile name (e.g., quick-test)")
+    parser.add_argument(
+        "--profile",
+        default=os.environ.get("PROFILE", ""),
+        help="profile name (e.g., quick-test)",
+    )
     args = parser.parse_args()
 
     # Run ID and loggers
@@ -205,6 +246,7 @@ def main() -> None:
     client = BybitV5Client()
     symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
     category = os.environ.get("BYBIT_CATEGORY", "linear")
+
     # Helpers to parse envs with inline comments (e.g., "7   # note")
     def _env_clean(name: str, default: str | float | int) -> str:
         raw = os.environ.get(name, str(default))
@@ -238,19 +280,33 @@ def main() -> None:
     # 1) API key validation
     try:
         account_type = os.environ.get("ACCOUNT_TYPE", "UNIFIED").upper()
-        logger.info(f"Bybit base={client.base_url} category={category} accountType={account_type}")
+        logger.info(
+            f"Bybit base={client.base_url} category={category} accountType={account_type}"
+        )
         wb = client.get_wallet_balance(accountType=account_type)
         logger.info("Wallet balance call OK: retCode=0")
-        slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="wallet_balance", payload=wb.get("result", {}))
+        slog.log_info(
+            ts=int(time.time() * 1000),
+            symbol=None,
+            tag="wallet_balance",
+            payload=wb.get("result", {}),
+        )
     except BybitAPIError as e:
         # One-shot fallback for account type mismatch
         if getattr(e, "ret_code", 0) in (401, 403):
             alt = "CONTRACT" if account_type == "UNIFIED" else "UNIFIED"
             try:
-                logger.warning(f"Wallet balance auth failed with {account_type}; retrying with {alt}")
+                logger.warning(
+                    f"Wallet balance auth failed with {account_type}; retrying with {alt}"
+                )
                 wb = client.get_wallet_balance(accountType=alt)
                 logger.info("Wallet balance call OK on fallback: retCode=0")
-                slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="wallet_balance", payload=wb.get("result", {}))
+                slog.log_info(
+                    ts=int(time.time() * 1000),
+                    symbol=None,
+                    tag="wallet_balance",
+                    payload=wb.get("result", {}),
+                )
             except BybitAPIError as e2:
                 logger.error(f"Wallet balance failed: {e2}")
                 logger.error(
@@ -266,24 +322,38 @@ def main() -> None:
     free = 0.0
     try:
         acct = wb.get("result", {}).get("list", [{}])[0]
-        total_equity = float(acct.get("totalEquity", 0)) if "totalEquity" in acct else 0.0
+        total_equity = (
+            float(acct.get("totalEquity", 0)) if "totalEquity" in acct else 0.0
+        )
         equity = total_equity
         # Free simplified: availableToWithdraw if present
-        free = float(acct.get("totalAvailableBalance") or acct.get("availableToWithdraw") or 0)
+        free = float(
+            acct.get("totalAvailableBalance") or acct.get("availableToWithdraw") or 0
+        )
     except Exception:
         pass
     logger.info(f"Equity={equity:.2f} USDT, Free={free:.2f} USDT")
 
     # Build symbol universe
     uni = build_universe(client)
-    logger.info(f"Universe: {len(uni.symbols)} symbols ({'discovered' if uni.discovered else 'static'}) -> {uni.symbols}")
-    slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="universe", payload={"symbols": uni.symbols, "discovered": uni.discovered})
+    logger.info(
+        f"Universe: {len(uni.symbols)} symbols ({'discovered' if uni.discovered else 'static'}) -> {uni.symbols}"
+    )
+    slog.log_info(
+        ts=int(time.time() * 1000),
+        symbol=None,
+        tag="universe",
+        payload={"symbols": uni.symbols, "discovered": uni.discovered},
+    )
 
     # Optional: start private WS for live event logging
     ws = None
     if enable_ws and BybitPrivateWS is not None:
+
         def _on_ws_msg(msg: dict[str, Any]) -> None:
-            slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="ws", payload=msg)
+            slog.log_info(
+                ts=int(time.time() * 1000), symbol=None, tag="ws", payload=msg
+            )
 
         def _on_ws_err(err: Exception) -> None:
             logger.warning(f"WS error: {err}")
@@ -296,7 +366,9 @@ def main() -> None:
             logger.warning(f"Private WS failed to start: {e}")
 
     # Rotation loop config
-    loop_interval = _env_float("NO_TRADE_SLEEP_SEC", _env_float("LOOP_INTERVAL_SEC", 5.0))
+    loop_interval = _env_float(
+        "NO_TRADE_SLEEP_SEC", _env_float("LOOP_INTERVAL_SEC", 5.0)
+    )
     consensus_ticks = _env_int("CONSENSUS_TICKS", 3)
     loop_idle = _env_float("LOOP_IDLE_SEC", 1.0)
     fixed_notional = _env_float("ORDER_SIZE_USDT", 0.0)
@@ -325,7 +397,12 @@ def main() -> None:
             flt = {"tickSize": None, "qtyStep": None, "minOrderQty": None}
 
         try:
-            client.set_leverage(symbol=symbol, buyLeverage=int(leverage), sellLeverage=int(leverage), category=category)
+            client.set_leverage(
+                symbol=symbol,
+                buyLeverage=int(leverage),
+                sellLeverage=int(leverage),
+                category=category,
+            )
             logger.info("Leverage set OK")
         except BybitAPIError as e:
             if getattr(e, "ret_code", None) == 110043:
@@ -343,7 +420,12 @@ def main() -> None:
             if exit_flag.check():
                 break
             ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
-        slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="orderbook", payload=ob.get("result", {}))
+        slog.log_info(
+            ts=int(time.time() * 1000),
+            symbol=symbol,
+            tag="orderbook",
+            payload=ob.get("result", {}),
+        )
         parse_ok = False
         try:
             bids = ob["result"]["b"]
@@ -354,7 +436,9 @@ def main() -> None:
             ask_sz = float(asks[0][1]) if len(asks[0]) > 1 else 0.0
             mid = (best_bid + best_ask) / 2
             spread = (best_ask - best_bid) / mid if mid > 0 else 0.0
-            obi = (bid_sz - ask_sz) / (bid_sz + ask_sz) if (bid_sz + ask_sz) > 0 else 0.0
+            obi = (
+                (bid_sz - ask_sz) / (bid_sz + ask_sz) if (bid_sz + ask_sz) > 0 else 0.0
+            )
             parse_ok = True
         except Exception as e:
             logger.warning(f"Failed to parse orderbook: {e}")
@@ -376,7 +460,12 @@ def main() -> None:
                 logger.warning(f"Ticker fallback failed: {e2}")
         if not parse_ok:
             blacklist[symbol] = int(time.time()) + 300
-            slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["parse_error:orderbook"], context={})
+            slog.log_why_no_trade(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                reasons=["parse_error:orderbook"],
+                context={},
+            )
             time.sleep(loop_interval)
             continue
         mids.append(mid)
@@ -384,7 +473,9 @@ def main() -> None:
         vols.add(max(0.0, bid_sz + ask_sz))
         if len(mids) > 50:
             mids.pop(0)
-        logger.info(f"[{symbol} {i+1}/{consensus_ticks}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}")
+        logger.info(
+            f"[{symbol} {i + 1}/{consensus_ticks}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}"
+        )
 
         # Regime pause checks (liquidity/spread) with strictness factor
         strict = os.environ.get("REGIME_STRICTNESS", "strict").lower()
@@ -398,33 +489,67 @@ def main() -> None:
         if not (depth_ok and spread_ok):
             reasons = []
             if not depth_ok:
-                reasons.append(f"depth<{min_depth_usd/factor:.0f}")
+                reasons.append(f"depth<{min_depth_usd / factor:.0f}")
             if not spread_ok:
-                reasons.append(f"spread={spread:.5f}>thr={(spread_threshold*spread_pause_mult*factor):.5f}")
+                reasons.append(
+                    f"spread={spread:.5f}>thr={(spread_threshold * spread_pause_mult * factor):.5f}"
+                )
             logger.info("Regime=PAUSE; " + ", ".join(reasons))
-            slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["regime_pause"] + reasons, context={"mid": mid})
+            slog.log_why_no_trade(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                reasons=["regime_pause"] + reasons,
+                context={"mid": mid},
+            )
             time.sleep(loop_interval)
             continue
 
         # 3) Strategy pack scoring (MIS/VRS/LSR) and selection
         sp = StrategyParams()
-        mis = mis_signal(closes.list(), orderbook_imbalance=(obi + 1) / 2, spread=spread, spread_threshold=spread_threshold, params=sp)
+        mis = mis_signal(
+            closes.list(),
+            orderbook_imbalance=(obi + 1) / 2,
+            spread=spread,
+            spread_threshold=spread_threshold,
+            params=sp,
+        )
         vrs = vrs_signal(closes.list(), vols.list(), sp)
         # Heuristic for LSR inputs
         wick_long = False
-        trade_burst = (bid_sz + ask_sz) > 0 and vols.list() and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
+        trade_burst = (
+            (bid_sz + ask_sz) > 0
+            and vols.list()
+            and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
+        )
         oi_drop = False  # not available without OI feed
         lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
         strat_name, strat_side = select_strategy(mis, vrs, lsr)
         if strat_name is None or strat_side is None:
             logger.info("No strategy consensus; sleeping")
-            slog.log_signal(ts=int(time.time() * 1000), symbol=symbol, scores={"mis": mis, "vrs": vrs, "lsr": lsr}, decision=None)
-            slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["no_consensus"], context={"mis": mis, "vrs": vrs, "lsr": lsr})
+            slog.log_signal(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                scores={"mis": mis, "vrs": vrs, "lsr": lsr},
+                decision=None,
+            )
+            slog.log_why_no_trade(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                reasons=["no_consensus"],
+                context={"mis": mis, "vrs": vrs, "lsr": lsr},
+            )
             time.sleep(loop_interval)
             continue
         signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
-        logger.info(f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal>0 else 'SELL')}")
-        slog.log_signal(ts=int(time.time() * 1000), symbol=symbol, scores={"mis": mis, "vrs": vrs, "lsr": lsr}, decision=f"{strat_name}:{'BUY' if signal>0 else 'SELL'}")
+        logger.info(
+            f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal > 0 else 'SELL')}"
+        )
+        slog.log_signal(
+            ts=int(time.time() * 1000),
+            symbol=symbol,
+            scores={"mis": mis, "vrs": vrs, "lsr": lsr},
+            decision=f"{strat_name}:{'BUY' if signal > 0 else 'SELL'}",
+        )
 
         prefer_limit = spread <= 0.0005 and _env_bool("PREFER_LIMIT_DEFAULT", True)
         # Avoid taker near funding if configured and nextFundingTime is close
@@ -459,34 +584,58 @@ def main() -> None:
         logger.info(
             f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
         )
-        slog.log_order(ts=int(time.time() * 1000), symbol=symbol, plan={
-            "side": plan.side,
-            "qty": plan.qty,
-            "order_type": plan.order_type,
-            "tif": plan.tif,
-            "price": plan.price,
-            "tp": plan.tp,
-            "sl": plan.sl,
-        })
+        slog.log_order(
+            ts=int(time.time() * 1000),
+            symbol=symbol,
+            plan={
+                "side": plan.side,
+                "qty": plan.qty,
+                "order_type": plan.order_type,
+                "tif": plan.tif,
+                "price": plan.price,
+                "tp": plan.tp,
+                "sl": plan.sl,
+            },
+        )
 
         # Risk checks
-        ok, reason = check_balance_guard(RiskContext(equity_usdt=equity, free_usdt=free, symbol=symbol, last_mid=mid))
+        ok, reason = check_balance_guard(
+            RiskContext(equity_usdt=equity, free_usdt=free, symbol=symbol, last_mid=mid)
+        )
         if not ok:
             logger.warning(f"Risk blocked (balance): {reason}")
-            slog.log_risk(ts=int(time.time() * 1000), symbol=symbol, ok=False, reason=reason, context={"stage": "balance_guard"})
+            slog.log_risk(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                ok=False,
+                reason=reason,
+                context={"stage": "balance_guard"},
+            )
             break
         notional = plan.qty * mid
         ok, reason = check_order_size(notional, equity)
         if not ok:
             logger.warning(f"Risk blocked (size): {reason}")
-            slog.log_risk(ts=int(time.time() * 1000), symbol=symbol, ok=False, reason=reason, context={"stage": "order_size"})
+            slog.log_risk(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                ok=False,
+                reason=reason,
+                context={"stage": "order_size"},
+            )
             time.sleep(loop_interval)
             continue
         if plan.order_type == "Limit" and plan.price is not None:
             ok, reason = slippage_guard(plan.price, mid)
             if not ok:
                 logger.warning(f"Risk blocked (slippage): {reason}")
-                slog.log_risk(ts=int(time.time() * 1000), symbol=symbol, ok=False, reason=reason, context={"stage": "slippage_guard"})
+                slog.log_risk(
+                    ts=int(time.time() * 1000),
+                    symbol=symbol,
+                    ok=False,
+                    reason=reason,
+                    context={"stage": "slippage_guard"},
+                )
                 time.sleep(loop_interval)
                 continue
 
@@ -508,16 +657,21 @@ def main() -> None:
                 takeProfit=str(plan.tp) if plan.tp else None,
                 stopLoss=str(plan.sl) if plan.sl else None,
             )
-            slog.log_order(ts=int(time.time() * 1000), symbol=symbol, plan={
-                "side": plan.side,
-                "qty": plan.qty,
-                "order_type": plan.order_type,
-                "tif": plan.tif,
-                "price": plan.price,
-                "tp": plan.tp,
-                "sl": plan.sl,
-                "order_link_id": plan.order_link_id,
-            }, result=res)
+            slog.log_order(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                plan={
+                    "side": plan.side,
+                    "qty": plan.qty,
+                    "order_type": plan.order_type,
+                    "tif": plan.tif,
+                    "price": plan.price,
+                    "tp": plan.tp,
+                    "sl": plan.sl,
+                    "order_link_id": plan.order_link_id,
+                },
+                result=res,
+            )
             logger.info("Order placed")
             traded = True
         except BybitAPIError as e:
@@ -528,34 +682,44 @@ def main() -> None:
         # Reflect open orders and positions
         try:
             oo = client.get_open_orders(symbol=symbol)
-            slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="open_orders", payload=oo)
+            slog.log_info(
+                ts=int(time.time() * 1000), symbol=symbol, tag="open_orders", payload=oo
+            )
         except BybitAPIError as e:
             logger.warning(f"Open orders fetch failed: {e}")
 
         try:
             pos = client.get_positions(category=category, symbol=symbol)
-            slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="positions", payload=pos)
+            slog.log_info(
+                ts=int(time.time() * 1000), symbol=symbol, tag="positions", payload=pos
+            )
             # Time stop and trailing if position present
             plist = pos.get("result", {}).get("list", [])
             if plist:
                 p = plist[0]
                 size = abs(float(p.get("size") or 0))
-                side_long = (p.get("side") == "Buy")
+                side_long = p.get("side") == "Buy"
                 avg_price = float(p.get("avgPrice") or 0)
                 # Simple trailing: if price moved favorably by trail_after_tp1, set trailingStop
                 trail_after = _env_float("TRAIL_AFTER_TP1_PCT", 0.0008)
                 tp_pct = _env_float("TP_PCT", 0.0010)
                 sl_pct = _env_float("SL_PCT", 0.0020)
                 if size > 0 and avg_price > 0:
-                    move = (mid - avg_price) / avg_price if side_long else (avg_price - mid) / avg_price
+                    move = (
+                        (mid - avg_price) / avg_price
+                        if side_long
+                        else (avg_price - mid) / avg_price
+                    )
                     if move >= trail_after:
                         try:
                             trailing_abs = round(avg_price * sl_pct, 4)
                             client.set_trading_stop(
                                 symbol=symbol,
                                 trailingStop=trailing_abs,
-                                takeProfit=avg_price * (1 + tp_pct if side_long else 1 - tp_pct),
-                                stopLoss=avg_price * (1 - sl_pct if side_long else 1 + sl_pct),
+                                takeProfit=avg_price
+                                * (1 + tp_pct if side_long else 1 - tp_pct),
+                                stopLoss=avg_price
+                                * (1 - sl_pct if side_long else 1 + sl_pct),
                                 category=category,
                             )
                             logger.info("Applied trailing stop via trading-stop API")
@@ -570,9 +734,21 @@ def main() -> None:
                         try:
                             qty = size
                             side = "SELL" if side_long else "BUY"
-                            client.close_position_market(symbol=symbol, side=side, qty=str(qty), category=category)
-                            logger.info(f"Time stop triggered after {held_sec}s; closing position")
-                            slog.log_pnl(ts=int(time.time() * 1000), symbol=symbol, realized=0.0, unrealized=None)
+                            client.close_position_market(
+                                symbol=symbol,
+                                side=side,
+                                qty=str(qty),
+                                category=category,
+                            )
+                            logger.info(
+                                f"Time stop triggered after {held_sec}s; closing position"
+                            )
+                            slog.log_pnl(
+                                ts=int(time.time() * 1000),
+                                symbol=symbol,
+                                realized=0.0,
+                                unrealized=None,
+                            )
                         except BybitAPIError as e:
                             logger.warning(f"Time stop close failed: {e}")
         except BybitAPIError as e:
@@ -581,7 +757,12 @@ def main() -> None:
         # Try to cancel by orderLinkId for smoke
         try:
             cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
-            slog.log_cancel(ts=int(time.time() * 1000), symbol=symbol, order_link_id=plan.order_link_id, reason="rotate_or_smoke")
+            slog.log_cancel(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                order_link_id=plan.order_link_id,
+                reason="rotate_or_smoke",
+            )
             logger.info("Order cancel sent")
         except BybitAPIError as e:
             logger.error(f"Cancel failed: {e}")
@@ -589,14 +770,16 @@ def main() -> None:
         time.sleep(loop_interval)
 
         if not traded:
-            logger.info(f"No consensus for {symbol} after {consensus_ticks} ticks → rotating")
+            logger.info(
+                f"No consensus for {symbol} after {consensus_ticks} ticks → rotating"
+            )
             time.sleep(loop_idle)
 
     logger.info("Exit requested; stopping rotation loop")
 
     # Graceful WS shutdown if enabled
     try:
-        if enable_ws and 'ws' in locals() and ws is not None:
+        if enable_ws and "ws" in locals() and ws is not None:
             ws.stop()
     except Exception:
         pass
