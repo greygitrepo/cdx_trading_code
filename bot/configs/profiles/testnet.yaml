@@ -1,0 +1,24 @@
+exchange:
+  network: testnet
+  maker_post_only: true
+  taker_on_strong_score: true
+  fallback_ioc: true
+params:
+  regime:
+    strictness: loose
+  orderbook:
+    min_depth_usd: 5000
+  universe:
+    topN: 8
+  indicators:
+    keltner_mult: 1.30
+    rsi2_low: 6
+    rsi2_high: 94
+    htf_bias: { enabled: true }
+entry_exit:
+  tp1: 0.0011
+  time_stop_mis: "12-20"
+  time_stop_vrs: "9-15"
+  time_stop_lsr: "7-12"
+runtime:
+  consensus_ticks: 2

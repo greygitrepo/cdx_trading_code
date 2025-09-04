@@ -62,6 +62,10 @@ class StructLogger:
     def log_info(self, *, ts: int, symbol: Optional[str], tag: str, payload: dict[str, Any]) -> None:
         self._write(BaseEvent(ts=ts, run_id=self.run_id, step=tag, symbol=symbol, meta=payload))
 
+    # Reasons for skipping/trade rejection at a step
+    def log_why_no_trade(self, *, ts: int, symbol: str, reasons: list[str], context: Optional[dict[str, Any]] = None) -> None:
+        self._write(BaseEvent(ts=ts, run_id=self.run_id, step="why_no_trade", symbol=symbol, meta={"reasons": reasons, **(context or {})}))
+
 
 def init_run_dir(base_logs: Path, run_id: str) -> Path:
     run_dir = base_logs / run_id

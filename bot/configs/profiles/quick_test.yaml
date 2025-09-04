@@ -1,0 +1,25 @@
+exchange:
+  network: testnet
+  maker_post_only: false
+  taker_on_strong_score: true
+  fallback_ioc: true
+params:
+  regime:
+    strictness: off
+  orderbook:
+    min_depth_usd: 200
+  universe:
+    topN: 0
+  indicators:
+    keltner_mult: 1.15
+    rsi2_low: 10
+    rsi2_high: 90
+    htf_bias: { enabled: false }
+entry_exit:
+  tp1: 0.0010
+  time_stop_mis: "8-12"
+  time_stop_vrs: "6-10"
+  time_stop_lsr: "5-8"
+runtime:
+  consensus_ticks: 1
+  symbol_universe: [BTCUSDT, ETHUSDT, SOLUSDT]

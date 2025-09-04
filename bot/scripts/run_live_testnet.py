@@ -115,18 +115,57 @@ def _load_dotenv_if_present() -> int:
 
 
 def _apply_profile_env(profile: str) -> None:
+    # Load overlay YAML and map key settings to envs the runner uses.
+    # Priority: CLI overrides > profile overlay > base env
+    prof_path = _P(f"bot/configs/profiles/{'quick_test' if profile=='quick-test' else profile}.yaml")
+    if not prof_path.exists():
+        return
+    with prof_path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    # Exchange/network
+    net = (cfg.get("exchange", {}) or {}).get("network")
+    if net:
+        os.environ.setdefault("TESTNET", "true" if str(net).lower() == "testnet" else "false")
+    maker_post = (cfg.get("exchange", {}) or {}).get("maker_post_only")
+    if maker_post is not None:
+        os.environ.setdefault("MAKER_POST_ONLY", str(bool(maker_post)).lower())
+    taker_on = (cfg.get("exchange", {}) or {}).get("taker_on_strong_score")
+    if taker_on is not None:
+        os.environ.setdefault("TAKER_ON_STRONG_SCORE", str(bool(taker_on)).lower())
+    fallback_ioc = (cfg.get("exchange", {}) or {}).get("fallback_ioc")
+    if fallback_ioc is not None:
+        os.environ.setdefault("FALLBACK_IOC", str(bool(fallback_ioc)).lower())
+
+    # Params overlays
+    params = cfg.get("params", {}) or {}
+    orderbook = params.get("orderbook", {}) or {}
+    if "min_depth_usd" in orderbook:
+        os.environ.setdefault("MIN_DEPTH_USD", str(orderbook["min_depth_usd"]))
+    regime = params.get("regime", {}) or {}
+    if "strictness" in regime:
+        os.environ.setdefault("REGIME_STRICTNESS", str(regime["strictness"]))
+
+    # indicators/universe overlays reserved for strategy layer; ignored here
+    # Quick-test: disable discovery by default
     if profile == "quick-test":
-        # Apply minimal env overrides for quick fills
-        os.environ.setdefault("PREFER_LIMIT_DEFAULT", "false")
-        os.environ.setdefault("MAKER_POST_ONLY", "false")
-        os.environ.setdefault("FALLBACK_IOC", "true")
-        os.environ.setdefault("SLIPPAGE_GUARD_PCT", "0.0015")
-        os.environ.setdefault("CONSENSUS_TICKS", "2")
-        os.environ.setdefault("MIN_DEPTH_USD", "2000")
-        os.environ.setdefault("TP_PCT", "0.0010")
-        os.environ.setdefault("SL_PCT", "0.0012")
-        os.environ.setdefault("TIME_STOP_SEC", "480")
-        os.environ.setdefault("NO_TRADE_SLEEP_SEC", "2")
+        os.environ.setdefault("DISCOVER_SYMBOLS", "false")
+
+    # Entry/exit
+    ex = cfg.get("entry_exit", {}) or {}
+    if "tp1" in ex:
+        os.environ.setdefault("TP_PCT", str(ex["tp1"]))
+    # For SL, prefer existing SL_PCT env if set
+    if "sl" in ex:
+        os.environ.setdefault("SL_PCT", str(ex["sl"]))
+
+    # Runtime
+    rt = cfg.get("runtime", {}) or {}
+    if "consensus_ticks" in rt:
+        os.environ.setdefault("CONSENSUS_TICKS", str(rt["consensus_ticks"]))
+    if "symbol_universe" in rt:
+        os.environ.setdefault("SYMBOL_UNIVERSE", ",".join(rt["symbol_universe"]))
+        os.environ.setdefault("DISCOVER_SYMBOLS", "false")
 
 
 def main() -> None:
@@ -259,9 +298,15 @@ def main() -> None:
     fixed_notional = _env_float("ORDER_SIZE_USDT", 0.0)
     exit_flag = ExitFlag()
     idx = 0
+    blacklist: dict[str, int] = {}
 
     while not exit_flag.check():
         symbol = uni.symbols[idx % max(1, len(uni.symbols))]
+        # Skip blacklisted symbols until expiry
+        now_s = int(time.time())
+        if symbol in blacklist and blacklist[symbol] > now_s:
+            idx += 1
+            continue
         idx += 1
 
         # 1.5) Load instrument filters & set leverage
@@ -295,6 +340,7 @@ def main() -> None:
                 break
             ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
         slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="orderbook", payload=ob.get("result", {}))
+        parse_ok = False
         try:
             bids = ob["result"]["b"]
             asks = ob["result"]["a"]
@@ -305,8 +351,28 @@ def main() -> None:
             mid = (best_bid + best_ask) / 2
             spread = (best_ask - best_bid) / mid if mid > 0 else 0.0
             obi = (bid_sz - ask_sz) / (bid_sz + ask_sz) if (bid_sz + ask_sz) > 0 else 0.0
-        except Exception:
-            logger.warning("Failed to parse orderbook; skipping iteration")
+            parse_ok = True
+        except Exception as e:
+            logger.warning(f"Failed to parse orderbook: {e}")
+            # Fallback: use ticker for mid/spread estimate
+            try:
+                tk = client.get_tickers(category=category, symbol=symbol)
+                it = (tk.get("result", {}).get("list", []) or [{}])[0]
+                a1 = float(it.get("ask1Price") or 0)
+                b1 = float(it.get("bid1Price") or 0)
+                if a1 > 0 and b1 > 0:
+                    mid = (a1 + b1) / 2
+                    spread = (a1 - b1) / mid if mid > 0 else 0.0
+                    bid_sz = float(it.get("bid1Size") or 0)
+                    ask_sz = float(it.get("ask1Size") or 0)
+                    obi = 0.0
+                    logger.info("Used ticker-based mid/spread fallback")
+                    parse_ok = True
+            except Exception as e2:
+                logger.warning(f"Ticker fallback failed: {e2}")
+        if not parse_ok:
+            blacklist[symbol] = int(time.time()) + 300
+            slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["parse_error:orderbook"], context={})
             time.sleep(loop_interval)
             continue
         mids.append(mid)
@@ -316,9 +382,23 @@ def main() -> None:
             mids.pop(0)
         logger.info(f"[{symbol} {i+1}/{consensus_ticks}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}")
 
-        # Regime pause checks (liquidity/spread)
-        if spread >= spread_threshold * spread_pause_mult or (bid_sz + ask_sz) * mid < min_depth_usd:
-            logger.info("Regime=PAUSE (wide spread or low depth); sleeping")
+        # Regime pause checks (liquidity/spread) with strictness factor
+        strict = os.environ.get("REGIME_STRICTNESS", "strict").lower()
+        factor = 1.0
+        if strict == "off":
+            factor = 10.0
+        elif strict == "loose":
+            factor = 3.0
+        depth_ok = (bid_sz + ask_sz) * mid >= (min_depth_usd / factor)
+        spread_ok = spread < (spread_threshold * spread_pause_mult * factor)
+        if not (depth_ok and spread_ok):
+            reasons = []
+            if not depth_ok:
+                reasons.append(f"depth<{min_depth_usd/factor:.0f}")
+            if not spread_ok:
+                reasons.append(f"spread={spread:.5f}>thr={(spread_threshold*spread_pause_mult*factor):.5f}")
+            logger.info("Regime=PAUSE; " + ", ".join(reasons))
+            slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["regime_pause"] + reasons, context={"mid": mid})
             time.sleep(loop_interval)
             continue
 
@@ -335,6 +415,7 @@ def main() -> None:
         if strat_name is None or strat_side is None:
             logger.info("No strategy consensus; sleeping")
             slog.log_signal(ts=int(time.time() * 1000), symbol=symbol, scores={"mis": mis, "vrs": vrs, "lsr": lsr}, decision=None)
+            slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["no_consensus"], context={"mis": mis, "vrs": vrs, "lsr": lsr})
             time.sleep(loop_interval)
             continue
         signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1

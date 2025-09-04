@@ -1,0 +1,24 @@
+exchange:
+  network: mainnet
+  maker_post_only: true
+  taker_on_strong_score: false
+  fallback_ioc: false
+params:
+  regime:
+    strictness: strict
+  orderbook:
+    min_depth_usd: 50000
+  universe:
+    topN: 12
+  indicators:
+    keltner_mult: 1.40
+    rsi2_low: 5
+    rsi2_high: 95
+    htf_bias: { enabled: true }
+entry_exit:
+  tp1: 0.0012
+  time_stop_mis: "15-25"
+  time_stop_vrs: "10-20"
+  time_stop_lsr: "8-15"
+runtime:
+  consensus_ticks: 3

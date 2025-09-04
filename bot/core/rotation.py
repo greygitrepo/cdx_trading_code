@@ -56,13 +56,29 @@ def build_universe(client: BybitV5Client) -> Universe:
         return Universe(symbols=syms, discovered=False)
 
     # 2) Discovery if enabled
-    if _env_bool("DISCOVER_SYMBOLS", True):
+    # Allow profile-level control via PROFILE env (quick-test disables discovery by default)
+    prof = _env_str("PROFILE", "").lower()
+    discover_default = False if prof == "quick-test" else True
+    if _env_bool("DISCOVER_SYMBOLS", discover_default):
         cat = _env_str("CATEGORY", _env_str("BYBIT_CATEGORY", "linear"))
         topn = _env_int("UNIVERSE_TOP_N", 10)
         try:
             # instruments-info for trading symbols
             ins = client.get_instruments(category=cat)
-            tradable = {it.get("symbol") for it in ins.get("result", {}).get("list", []) if it.get("status") == "Trading"}
+            tradable = set()
+            for it in ins.get("result", {}).get("list", []):
+                try:
+                    if it.get("status") != "Trading":
+                        continue
+                    # Prefer USDT linear perpetuals on testnet
+                    if str(it.get("quoteCoin", "")).upper() != "USDT":
+                        continue
+                    ct = str(it.get("contractType", "")).lower()
+                    if ct and "perpetual" not in ct:
+                        continue
+                    tradable.add(it.get("symbol"))
+                except Exception:
+                    continue
         except Exception:
             tradable = set()
         try:
@@ -82,8 +98,10 @@ def build_universe(client: BybitV5Client) -> Universe:
             syms_ranked = [it.get("symbol") for it in filtered if it.get("symbol")]
         except Exception:
             syms_ranked = []
-        # intersect with tradable if available
+        # intersect with tradable if available; fallback whitelist for testnet
         syms = [s for s in syms_ranked if (not tradable or s in tradable)][:topn]
+        if not syms:
+            syms = [s for s in ["BTCUSDT", "ETHUSDT", "SOLUSDT"] if (not tradable or s in tradable)]
         if syms:
             return Universe(symbols=syms, discovered=True)
     # 3) Fallback sensible defaults
