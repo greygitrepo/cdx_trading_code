@@ -197,7 +197,7 @@ def main() -> None:
         vols.add(max(0.0, bid_sz + ask_sz))
         if len(mids) > 50:
             mids.pop(0)
-            logger.info(f"[{symbol} {i+1}/{consensus_ticks}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}")
+        logger.info(f"[{symbol} {i+1}/{consensus_ticks}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}")
 
         # Regime pause checks (liquidity/spread)
         if spread >= spread_threshold * spread_pause_mult or (bid_sz + ask_sz) * mid < min_depth_usd:
@@ -206,21 +206,21 @@ def main() -> None:
             continue
 
         # 3) Strategy pack scoring (MIS/VRS/LSR) and selection
-            sp = StrategyParams()
-            mis = mis_signal(closes.list(), orderbook_imbalance=(obi + 1) / 2, spread=spread, spread_threshold=spread_threshold, params=sp)
-            vrs = vrs_signal(closes.list(), vols.list(), sp)
-            # Heuristic for LSR inputs
-            wick_long = False
-            trade_burst = (bid_sz + ask_sz) > 0 and vols.list() and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
-            oi_drop = False  # not available without OI feed
-            lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
-            strat_name, strat_side = select_strategy(mis, vrs, lsr)
-            if strat_name is None or strat_side is None:
-                logger.info("No strategy consensus; sleeping")
-                time.sleep(loop_interval)
-                continue
-            signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
-            logger.info(f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal>0 else 'SELL')}")
+        sp = StrategyParams()
+        mis = mis_signal(closes.list(), orderbook_imbalance=(obi + 1) / 2, spread=spread, spread_threshold=spread_threshold, params=sp)
+        vrs = vrs_signal(closes.list(), vols.list(), sp)
+        # Heuristic for LSR inputs
+        wick_long = False
+        trade_burst = (bid_sz + ask_sz) > 0 and vols.list() and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
+        oi_drop = False  # not available without OI feed
+        lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
+        strat_name, strat_side = select_strategy(mis, vrs, lsr)
+        if strat_name is None or strat_side is None:
+            logger.info("No strategy consensus; sleeping")
+            time.sleep(loop_interval)
+            continue
+        signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
+        logger.info(f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal>0 else 'SELL')}")
 
         prefer_limit = spread <= 0.0005
         # Avoid taker near funding if configured and nextFundingTime is close
@@ -238,19 +238,20 @@ def main() -> None:
                         continue
         except Exception:
             pass
-            plan = build_order_plan(
-                signal=signal,
-                last_price=mid,
-                equity_usdt=equity,
-                symbol=symbol,
-                leverage=leverage,
-                price_tick=flt.get("tickSize"),
-                qty_step=flt.get("qtyStep"),
-                min_qty=flt.get("minOrderQty"),
-                prefer_limit=prefer_limit,
-                post_only=prefer_limit,
-                fixed_notional_usdt=(fixed_notional if fixed_notional > 0 else None),
-            )
+
+        plan = build_order_plan(
+            signal=signal,
+            last_price=mid,
+            equity_usdt=equity,
+            symbol=symbol,
+            leverage=leverage,
+            price_tick=flt.get("tickSize"),
+            qty_step=flt.get("qtyStep"),
+            min_qty=flt.get("minOrderQty"),
+            prefer_limit=prefer_limit,
+            post_only=prefer_limit,
+            fixed_notional_usdt=(fixed_notional if fixed_notional > 0 else None),
+        )
         logger.info(
             f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
         )
@@ -278,26 +279,26 @@ def main() -> None:
             time.sleep(loop_interval)
             continue
 
-            # 4) Place order and then cancel for smoke
-            try:
-                res = client.place_order(
-                    symbol=plan.symbol,
-                    side=plan.side,
-                    qty=str(round(plan.qty, 6)),
-                    orderType=plan.order_type,
-                    timeInForce=plan.tif,
-                    price=str(plan.price) if plan.price is not None else None,
-                    orderLinkId=plan.order_link_id,
-                    takeProfit=str(plan.tp) if plan.tp else None,
-                    stopLoss=str(plan.sl) if plan.sl else None,
-                )
-                write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_create", "data": res})
-                logger.info("Order placed")
-                traded = True
-            except BybitAPIError as e:
-                logger.error(f"Place order failed: {e}")
-                time.sleep(loop_interval)
-                continue
+        # 4) Place order and then cancel for smoke
+        try:
+            res = client.place_order(
+                symbol=plan.symbol,
+                side=plan.side,
+                qty=str(round(plan.qty, 6)),
+                orderType=plan.order_type,
+                timeInForce=plan.tif,
+                price=str(plan.price) if plan.price is not None else None,
+                orderLinkId=plan.order_link_id,
+                takeProfit=str(plan.tp) if plan.tp else None,
+                stopLoss=str(plan.sl) if plan.sl else None,
+            )
+            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_create", "data": res})
+            logger.info("Order placed")
+            traded = True
+        except BybitAPIError as e:
+            logger.error(f"Place order failed: {e}")
+            time.sleep(loop_interval)
+            continue
 
         # Reflect open orders and positions
         try:
@@ -351,15 +352,15 @@ def main() -> None:
         except BybitAPIError as e:
             logger.warning(f"Positions fetch failed: {e}")
 
-            # Try to cancel by orderLinkId for smoke
-            try:
-                cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
-                write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_cancel", "data": cres})
-                logger.info("Order cancel sent")
-            except BybitAPIError as e:
-                logger.error(f"Cancel failed: {e}")
+        # Try to cancel by orderLinkId for smoke
+        try:
+            cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
+            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_cancel", "data": cres})
+            logger.info("Order cancel sent")
+        except BybitAPIError as e:
+            logger.error(f"Cancel failed: {e}")
 
-            time.sleep(loop_interval)
+        time.sleep(loop_interval)
 
         if not traded:
             logger.info(f"No consensus for {symbol} after {consensus_ticks} ticks → rotating")
