@@ -16,10 +16,12 @@ class BybitClientTestnet:
         self.client = BybitV5Client(testnet=True, category="linear")
 
     # -------- Market data --------
-    def get_mark_price(self, symbol: str) -> float:
+    def get_mark_price(self, symbol: str, *, category: str | None = None) -> float:
         # Use best effort: ticker last price if available; fallback mid from level-1 book
         try:
-            tk = self.client.get_tickers(symbol=symbol)
+            tk = self.client.get_tickers(
+                category=category or self.client.default_category, symbol=symbol
+            )
             lst = tk.get("result", {}).get("list", [])
             if lst:
                 p = float(lst[0].get("lastPrice") or lst[0].get("lastPriceE8") or 0)
@@ -27,7 +29,9 @@ class BybitClientTestnet:
                     return p
         except Exception:
             pass
-        ob = self.client.get_orderbook(symbol)
+        ob = self.client.get_orderbook(
+            symbol, category=category or self.client.default_category
+        )
         try:
             bids = ob.get("result", {}).get("b", [[0]])
             asks = ob.get("result", {}).get("a", [[0]])

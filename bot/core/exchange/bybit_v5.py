@@ -46,6 +46,7 @@ class BybitAPIError(Exception):
 
 class EdgeProtectionError(BybitAPIError):
     """Raised when Bybit public edge returns HTML/non-JSON (403/5xx) after retries."""
+
     pass
 
 
@@ -72,7 +73,12 @@ class BybitV5Client:
             DEFAULT_BASE_TESTNET if testnet else DEFAULT_BASE_MAINNET
         )
         self.recv_window_ms = recv_window_ms
-        self._client = httpx.Client(timeout=timeout)
+        # Configure granular timeouts to avoid long hangs on CI/public edges
+        try:
+            timeout_obj = httpx.Timeout(connect=5.0, read=7.0, write=5.0, pool=5.0)
+        except Exception:
+            timeout_obj = timeout
+        self._client = httpx.Client(timeout=timeout_obj)
         self.default_category = category or os.environ.get("BYBIT_CATEGORY", "linear")
 
     # -------- Signing helpers --------
@@ -117,7 +123,7 @@ class BybitV5Client:
         params: Dict[str, Any] | None = None,
         data: Dict[str, Any] | None = None,
         auth: bool = False,
-        max_retries: int = 3,
+        max_retries: int = 2,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
         headers: Dict[str, str] = {
@@ -127,8 +133,15 @@ class BybitV5Client:
             "User-Agent": "cdx-trading-bot/1.0 (+httpx)",
         }
         ts_ms = int(time.time() * 1000)
+        start_ts = time.time()
+        total_timeout = float(os.environ.get("BYBIT_HTTP_TOTAL_TIMEOUT", "20"))
         attempt = 0
         while True:
+            # Total elapsed guard
+            if (time.time() - start_ts) > total_timeout:
+                raise BybitAPIError(
+                    408, f"total timeout exceeded {total_timeout}s for {path}"
+                )
             # Ensure we send the exact same payload that we sign
             clean_params: Dict[str, Any] | None = None
             clean_data: Dict[str, Any] | None = None

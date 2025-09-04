@@ -88,7 +88,7 @@ jobs:
           test -n "${BYBIT_API_KEY}" || (echo "BYBIT_API_KEY missing"; exit 1)
           test -n "${BYBIT_API_SECRET}" || (echo "BYBIT_API_SECRET missing"; exit 1)
       - name: Pytest (ops+integration)
-        run: pytest -q -m "ops or integration" --maxfail=1 --disable-warnings
+        run: pytest -m "ops or integration" -vv -o log_cli=true --log-cli-level=INFO --durations=10 --maxfail=1 --disable-warnings
       - name: Upload paper report
         uses: actions/upload-artifact@v4
         with:

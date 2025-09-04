@@ -3,3 +3,4 @@ ruff
 pydantic
 pyyaml
 httpx
+pytest-timeout
