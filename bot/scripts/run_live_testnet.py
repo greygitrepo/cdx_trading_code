@@ -86,6 +86,34 @@ def require_env_flags(logger: logging.Logger) -> None:
         logger.warning("LIVE_MODE must be true and TESTNET true for this script")
 
 
+def _load_dotenv_if_present() -> int:
+    """Lightweight .env loader to ease local runs (no external deps).
+
+    Loads key=value pairs from repo-root `.env` if present. Does not override already-set env vars.
+    Returns number of variables loaded.
+    """
+    try:
+        env_fp = _P(__file__).resolve().parents[2] / ".env"
+    except Exception:
+        return 0
+    if not env_fp.exists():
+        return 0
+    loaded = 0
+    for line in env_fp.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if "#" in v:
+            v = v.split("#", 1)[0].strip()
+        if k and (k not in os.environ):
+            os.environ[k] = v
+            loaded += 1
+    return loaded
+
+
 def _apply_profile_env(profile: str) -> None:
     if profile == "quick-test":
         # Apply minimal env overrides for quick fills
@@ -110,6 +138,10 @@ def main() -> None:
     # Run ID and loggers
     run_id = f"run_{_dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
     logger, logs_dir = setup_loggers(run_id)
+    # Load .env if present (no override)
+    n_loaded = _load_dotenv_if_present()
+    if n_loaded:
+        logger.info(f"Loaded {n_loaded} vars from .env")
     slog = StructLogger(logs_dir, run_id)
     require_env_flags(logger)
     # Load profile config if requested
@@ -168,12 +200,23 @@ def main() -> None:
         logger.info("Wallet balance call OK: retCode=0")
         slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="wallet_balance", payload=wb.get("result", {}))
     except BybitAPIError as e:
-        logger.error(f"Wallet balance failed: {e}")
+        # One-shot fallback for account type mismatch
         if getattr(e, "ret_code", 0) in (401, 403):
-            logger.error(
-                "Auth failed (401/403). Check: TESTNET key pair, ACCOUNT_TYPE (UNIFIED vs CONTRACT), IP whitelist, and system time."
-            )
-        sys.exit(2)
+            alt = "CONTRACT" if account_type == "UNIFIED" else "UNIFIED"
+            try:
+                logger.warning(f"Wallet balance auth failed with {account_type}; retrying with {alt}")
+                wb = client.get_wallet_balance(accountType=alt)
+                logger.info("Wallet balance call OK on fallback: retCode=0")
+                slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="wallet_balance", payload=wb.get("result", {}))
+            except BybitAPIError as e2:
+                logger.error(f"Wallet balance failed: {e2}")
+                logger.error(
+                    "Auth failed (401/403). Check: TESTNET key pair, ACCOUNT_TYPE (UNIFIED vs CONTRACT), IP whitelist, and system time."
+                )
+                sys.exit(2)
+        else:
+            logger.error(f"Wallet balance failed: {e}")
+            sys.exit(2)
 
     # Extract equity and free balance (best effort)
     equity = 0.0
