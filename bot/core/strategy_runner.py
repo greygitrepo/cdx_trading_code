@@ -74,7 +74,11 @@ def build_order_plan(
 
     side = "BUY" if signal > 0 else "SELL"
     max_notional = equity_usdt * alloc
-    notional = fixed_notional_usdt if (fixed_notional_usdt is not None and fixed_notional_usdt > 0) else max_notional
+    notional = (
+        fixed_notional_usdt
+        if (fixed_notional_usdt is not None and fixed_notional_usdt > 0)
+        else max_notional
+    )
     # Linear USDT perps: qty = notional * leverage / price
     qty = max(0.0, (notional * lev) / max(last_price, 1e-9))
     # Apply precision/limits if provided

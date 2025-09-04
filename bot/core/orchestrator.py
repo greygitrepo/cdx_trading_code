@@ -28,7 +28,9 @@ class PositionSlot:
 class SlotManager:
     def __init__(self, max_slots: int) -> None:
         self.max_slots = max_slots
-        self._slots: Dict[int, Optional[PositionSlot]] = {i: None for i in range(max_slots)}
+        self._slots: Dict[int, Optional[PositionSlot]] = {
+            i: None for i in range(max_slots)
+        }
         self._runtime_dir = _ensure_runtime_logs()
 
     def free_count(self) -> int:
@@ -46,10 +48,20 @@ class SlotManager:
             raise ValueError("symbol already managed")
         for i, v in self._slots.items():
             if v is None:
-                slot = PositionSlot(symbol=symbol, state="entry", entry_time=time.time())
+                slot = PositionSlot(
+                    symbol=symbol, state="entry", entry_time=time.time()
+                )
                 self._slots[i] = slot
                 pos_fp = self._runtime_dir / "positions.jsonl"
-                log_jsonl(pos_fp, {"ts": int(time.time() * 1000), "event": "slot_acquired", "slot": i, "symbol": symbol})
+                log_jsonl(
+                    pos_fp,
+                    {
+                        "ts": int(time.time() * 1000),
+                        "event": "slot_acquired",
+                        "slot": i,
+                        "symbol": symbol,
+                    },
+                )
                 return i, slot
         raise RuntimeError("no free slot")
 
@@ -58,7 +70,15 @@ class SlotManager:
             if v is not None and v.symbol == symbol:
                 self._slots[i] = None
                 pos_fp = self._runtime_dir / "positions.jsonl"
-                log_jsonl(pos_fp, {"ts": int(time.time() * 1000), "event": "slot_released", "slot": i, "symbol": symbol})
+                log_jsonl(
+                    pos_fp,
+                    {
+                        "ts": int(time.time() * 1000),
+                        "event": "slot_released",
+                        "slot": i,
+                        "symbol": symbol,
+                    },
+                )
                 return
 
     def iter_slots(self) -> Iterable[Tuple[int, PositionSlot]]:
@@ -78,8 +98,13 @@ def log_jsonl(path: Path, obj: dict) -> None:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
-def resolve_total_budget_usdt(*, total_budget_env: Optional[float], total_budget_cfg: Optional[float],
-                              balance_free: Optional[float], use_balance_ratio: float = 1.0) -> float:
+def resolve_total_budget_usdt(
+    *,
+    total_budget_env: Optional[float],
+    total_budget_cfg: Optional[float],
+    balance_free: Optional[float],
+    use_balance_ratio: float = 1.0,
+) -> float:
     # Priority: Env > Config > Balance * ratio
     if total_budget_env is not None:
         return float(total_budget_env)
@@ -110,7 +135,9 @@ def safe_float_env(name: str) -> Optional[float]:
         return None
 
 
-def compute_per_symbol_budget(total_budget_usdt: float, active: int, to_fill: int) -> float:
+def compute_per_symbol_budget(
+    total_budget_usdt: float, active: int, to_fill: int
+) -> float:
     denom = max(1, active + to_fill)
     return max(0.0, total_budget_usdt / float(denom))
 
@@ -135,7 +162,9 @@ def plan_entries(
     orders_fp = runtime_dir / "orders.jsonl"
 
     exclude = slot_mgr.current_symbols() | open_order_symbols | position_symbols
-    free_slots = min(max(0, max_symbols - slot_mgr.active_count()), slot_mgr.free_count())
+    free_slots = min(
+        max(0, max_symbols - slot_mgr.active_count()), slot_mgr.free_count()
+    )
     # Fill only as many as free slots
     target: List[str] = []
     for s in symbols_ranked:
@@ -145,14 +174,21 @@ def plan_entries(
         if len(target) >= free_slots:
             break
 
-    per_budget = compute_per_symbol_budget(total_budget_usdt, slot_mgr.active_count(), len(target))
+    per_budget = compute_per_symbol_budget(
+        total_budget_usdt, slot_mgr.active_count(), len(target)
+    )
     results: List[dict] = []
     for sym in target:
         px = prices.get(sym, 0.0)
         rule = rules.get(sym, {})
         sized: SizedOrder = compute_order_qty(
-            px, per_budget, leverage=leverage, lot_step=rule.get("lot_step"), tick_size=rule.get("tick_size"),
-            min_qty=rule.get("min_qty"), min_notional=rule.get("min_notional"),
+            px,
+            per_budget,
+            leverage=leverage,
+            lot_step=rule.get("lot_step"),
+            tick_size=rule.get("tick_size"),
+            min_qty=rule.get("min_qty"),
+            min_notional=rule.get("min_notional"),
         )
         acquired = slot_mgr.acquire(sym)
         try:
@@ -168,7 +204,9 @@ def plan_entries(
             "est_notional": sized.est_notional,
             "used_budget": sized.used_budget,
         }
-        log_jsonl(orders_fp, {"ts": int(time.time() * 1000), "event": "entry_plan", **payload})
+        log_jsonl(
+            orders_fp, {"ts": int(time.time() * 1000), "event": "entry_plan", **payload}
+        )
         results.append(payload)
     return results
 
@@ -185,8 +223,15 @@ class Orchestrator:
       - close_position(symbol)
     """
 
-    def __init__(self, *, ex, slot_mgr: SlotManager, leverage: float = 5.0, max_symbols: int = 5,
-                 total_budget_usdt: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        *,
+        ex,
+        slot_mgr: SlotManager,
+        leverage: float = 5.0,
+        max_symbols: int = 5,
+        total_budget_usdt: Optional[float] = None,
+    ) -> None:
         self.ex = ex
         self.slot_mgr = slot_mgr
         self.leverage = leverage
@@ -198,23 +243,42 @@ class Orchestrator:
         env_total = safe_float_env("TOTAL_BUDGET_USDT")
         cfg_total = self.total_budget_usdt
         # Exchange free balance is not fetched here; ops tests may pass explicit budget
-        return resolve_total_budget_usdt(total_budget_env=env_total, total_budget_cfg=cfg_total,
-                                         balance_free=None, use_balance_ratio=float(os.getenv("RISK_USE_BALANCE_RATIO", "1.0")))
+        return resolve_total_budget_usdt(
+            total_budget_env=env_total,
+            total_budget_cfg=cfg_total,
+            balance_free=None,
+            use_balance_ratio=float(os.getenv("RISK_USE_BALANCE_RATIO", "1.0")),
+        )
 
-    def run_loop(self, *, max_ticks: int = 1, bootstrap_candidates: Optional[List[str]] = None, backoff_max: int = 2) -> None:
+    def run_loop(
+        self,
+        *,
+        max_ticks: int = 1,
+        bootstrap_candidates: Optional[List[str]] = None,
+        backoff_max: int = 2,
+    ) -> None:
         budget_total = self._resolve_budget() or 1000.0
         defaults = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT"]
         candidates = bootstrap_candidates[:] if bootstrap_candidates else defaults
         for _ in range(max(1, max_ticks)):
             # Determine exclude set
             try:
-                exclude = set(self.ex.position_symbols()) | set(self.ex.open_order_symbols()) | self.slot_mgr.current_symbols()
+                exclude = (
+                    set(self.ex.position_symbols())
+                    | set(self.ex.open_order_symbols())
+                    | self.slot_mgr.current_symbols()
+                )
             except Exception:
                 exclude = self.slot_mgr.current_symbols()
             cands = top_n(candidates, self.max_symbols, exclude_symbols=exclude)
-            free_slots = min(self.max_symbols - self.slot_mgr.active_count(), self.slot_mgr.free_count())
-            target = cands[:max(0, free_slots)]
-            per_budget = compute_per_symbol_budget(budget_total, self.slot_mgr.active_count(), len(target))
+            free_slots = min(
+                self.max_symbols - self.slot_mgr.active_count(),
+                self.slot_mgr.free_count(),
+            )
+            target = cands[: max(0, free_slots)]
+            per_budget = compute_per_symbol_budget(
+                budget_total, self.slot_mgr.active_count(), len(target)
+            )
             for sym in target:
                 # Try/fallback with simple backoff on transient errors
                 attempt = 0
@@ -223,8 +287,11 @@ class Orchestrator:
                         px = float(self.ex.get_mark_price(sym))
                         rule = self.ex.get_market_rules(sym)
                         sized = compute_order_qty(
-                            px, per_budget, leverage=self.leverage,
-                            lot_step=getattr(rule, "lot_step", None), tick_size=getattr(rule, "tick_size", None),
+                            px,
+                            per_budget,
+                            leverage=self.leverage,
+                            lot_step=getattr(rule, "lot_step", None),
+                            tick_size=getattr(rule, "tick_size", None),
                             min_qty=getattr(rule, "min_qty", None),
                         )
                         self.slot_mgr.acquire(sym)
@@ -240,7 +307,15 @@ class Orchestrator:
                     except Exception:
                         if attempt >= backoff_max:
                             # Log and continue next symbol
-                            log_jsonl(self.runtime / "orders.jsonl", {"ts": int(time.time() * 1000), "event": "error", "symbol": sym, "attempt": attempt})
+                            log_jsonl(
+                                self.runtime / "orders.jsonl",
+                                {
+                                    "ts": int(time.time() * 1000),
+                                    "event": "error",
+                                    "symbol": sym,
+                                    "attempt": attempt,
+                                },
+                            )
                             break
                         attempt += 1
-                        time.sleep(0.1 * (2 ** attempt))
+                        time.sleep(0.1 * (2**attempt))

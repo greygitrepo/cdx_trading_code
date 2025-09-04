@@ -51,4 +51,3 @@ def test_long_short_chain_on_testnet_integration():
     # Attempt to close position immediately
     ex.close_position(sym)
     assert ex.get_position_size(sym) == 0
-

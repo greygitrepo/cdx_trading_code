@@ -10,12 +10,15 @@ from typing import Any, Literal
 
 try:  # Prefer pydantic v2
     from pydantic import BaseModel, Field
-except Exception:  # pragma: no cover - lightweight fallback if pydantic absent at runtime
+except (
+    Exception
+):  # pragma: no cover - lightweight fallback if pydantic absent at runtime
     # Minimal shim to avoid hard dependency during non-config tests
     from dataclasses import dataclass as BaseModel  # type: ignore[assignment]
 
     def Field(default: Any = None, **_: Any) -> Any:  # type: ignore[override]
         return default
+
 
 import yaml
 
@@ -27,7 +30,9 @@ class ExchangeConfig(BaseModel):
     network: Literal["testnet", "mainnet"] = Field("testnet")
     category: Literal["linear", "inverse", "spot"] = Field("linear")
     symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT"])
-    prefer_maker_bps_threshold: float = Field(0.04, description="Spread threshold in % for maker preference")
+    prefer_maker_bps_threshold: float = Field(
+        0.04, description="Spread threshold in % for maker preference"
+    )
     maker_post_only: bool = True
     taker_on_strong_score: bool = True
     fallback_ioc: bool = True

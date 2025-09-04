@@ -20,4 +20,3 @@ def test_slippage_prices() -> None:
     assert is_maker is False
     # 1 bps on ask side
     assert price > tick.ask
-

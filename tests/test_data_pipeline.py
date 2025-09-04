@@ -25,4 +25,3 @@ def test_fetch_testnet_candles_and_rules_integration():
     px = ex.get_mark_price("BTCUSDT")
     candles = ex.get_klines("BTCUSDT", interval="1", limit=10)
     assert rule and px > 0 and len(candles) > 0
-

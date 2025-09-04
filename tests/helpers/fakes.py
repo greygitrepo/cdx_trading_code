@@ -26,8 +26,17 @@ class FakeExchangeClient:
     def get_market_rules(self, symbol: str) -> MarketRule:
         return self.rules[symbol]
 
-    def place_order(self, symbol: str, side: str, qty: float, price: float | None = None, reduce_only: bool = False):
-        self.orders.append({"symbol": symbol, "side": side, "qty": qty, "reduce_only": reduce_only})
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float | None = None,
+        reduce_only: bool = False,
+    ):
+        self.orders.append(
+            {"symbol": symbol, "side": side, "qty": qty, "reduce_only": reduce_only}
+        )
         if reduce_only:
             # Reduce-only adjusts in the specified side direction without flipping
             if side.lower() == "buy":

@@ -42,15 +42,26 @@ class BybitClientTestnet:
     def get_market_rules(self, symbol: str) -> Any:
         ins = self.client.get_instruments(category=self.client.default_category)
         flt = self.client.extract_symbol_filters(ins, symbol)
-        return type("Rule", (), {
-            "lot_step": flt.get("qtyStep"),
-            "tick_size": flt.get("tickSize"),
-            "min_qty": flt.get("minOrderQty"),
-        })()
+        return type(
+            "Rule",
+            (),
+            {
+                "lot_step": flt.get("qtyStep"),
+                "tick_size": flt.get("tickSize"),
+                "min_qty": flt.get("minOrderQty"),
+            },
+        )()
 
-    def get_klines(self, symbol: str, interval: str = "1", limit: int = 10) -> List[Dict[str, Any]]:
+    def get_klines(
+        self, symbol: str, interval: str = "1", limit: int = 10
+    ) -> List[Dict[str, Any]]:
         # Use private request helper
-        params = {"category": self.client.default_category, "symbol": symbol, "interval": interval, "limit": limit}
+        params = {
+            "category": self.client.default_category,
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit,
+        }
         j = self.client._request("GET", "/v5/market/kline", params=params, auth=False)  # noqa: SLF001
         return j.get("result", {}).get("list", [])
 
@@ -81,7 +92,14 @@ class BybitClientTestnet:
             return []
 
     # -------- Trading helpers --------
-    def place_order(self, symbol: str, side: str, qty: float, price: Optional[float] = None, reduce_only: bool = False) -> str:
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: Optional[float] = None,
+        reduce_only: bool = False,
+    ) -> str:
         tif = "IOC" if price is None else "GTC"
         res = self.client.place_order(
             symbol=symbol,

@@ -27,26 +27,31 @@ def test_signing_prehash_and_signature_matches_snapshot(monkeypatch):
         "reduceOnly": None,
     }
     payload = client._minified_json(body)
-    prehash = client._build_prehash(str(ts), client.api_key, str(client.recv_window_ms), payload)
+    prehash = client._build_prehash(
+        str(ts), client.api_key, str(client.recv_window_ms), payload
+    )
     # Snapshot of expected prehash string
     assert prehash == (
-        "1700000000000" "test_key" "5000"
-        + json.dumps({
-            "category": "linear",
-            "symbol": "BTCUSDT",
-            "side": "BUY",
-            "orderType": "Limit",
-            "qty": "0.01",
-            "timeInForce": "GTC",
-            "price": "25000",
-            "orderLinkId": "abc123",
-        }, separators=(",", ":"))
+        "1700000000000"
+        "test_key"
+        "5000"
+        + json.dumps(
+            {
+                "category": "linear",
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "orderType": "Limit",
+                "qty": "0.01",
+                "timeInForce": "GTC",
+                "price": "25000",
+                "orderLinkId": "abc123",
+            },
+            separators=(",", ":"),
+        )
     )
 
     # Expected signature computed independently
-    expected_sig = hmac.new(
-        b"secret", prehash.encode(), hashlib.sha256
-    ).hexdigest()
+    expected_sig = hmac.new(b"secret", prehash.encode(), hashlib.sha256).hexdigest()
     got_sig = client._sign(ts, payload)
     assert got_sig == expected_sig
 
@@ -56,13 +61,15 @@ def test_place_order_payload(monkeypatch):
     sent = {}
 
     def _fake_request(method, path, params=None, data=None, auth=False, max_retries=3):  # noqa: D401
-        sent.update({
-            "method": method,
-            "path": path,
-            "params": params,
-            "data": data,
-            "auth": auth,
-        })
+        sent.update(
+            {
+                "method": method,
+                "path": path,
+                "params": params,
+                "data": data,
+                "auth": auth,
+            }
+        )
         return {"retCode": 0, "retMsg": "OK", "result": {}}
 
     monkeypatch.setattr(client, "_request", _fake_request)
@@ -119,7 +126,9 @@ def test_set_leverage_payload(monkeypatch):
         return {"retCode": 0, "retMsg": "OK", "result": {}}
 
     monkeypatch.setattr(client, "_request", _fake_request)
-    client.set_leverage(symbol="BTCUSDT", buyLeverage=10, sellLeverage=10, category="linear")
+    client.set_leverage(
+        symbol="BTCUSDT", buyLeverage=10, sellLeverage=10, category="linear"
+    )
     assert sent["method"] == "POST"
     assert sent["path"] == "/v5/position/set-leverage"
     assert sent["auth"] is True
@@ -137,7 +146,13 @@ def test_set_trading_stop_payload(monkeypatch):
         return {"retCode": 0, "retMsg": "OK", "result": {}}
 
     monkeypatch.setattr(client, "_request", _fake_request)
-    client.set_trading_stop(symbol="BTCUSDT", takeProfit=30050, stopLoss=29950, trailingStop=30, category="linear")
+    client.set_trading_stop(
+        symbol="BTCUSDT",
+        takeProfit=30050,
+        stopLoss=29950,
+        trailingStop=30,
+        category="linear",
+    )
     assert sent["method"] == "POST"
     assert sent["path"] == "/v5/position/trading-stop"
     assert sent["auth"] is True
@@ -156,7 +171,9 @@ def test_close_position_market_payload(monkeypatch):
         return {"retCode": 0, "retMsg": "OK", "result": {}}
 
     monkeypatch.setattr(client, "_request", _fake_request)
-    client.close_position_market(symbol="BTCUSDT", side="SELL", qty="0.01", category="linear")
+    client.close_position_market(
+        symbol="BTCUSDT", side="SELL", qty="0.01", category="linear"
+    )
     assert sent["method"] == "POST"
     assert sent["path"] == "/v5/order/create"
     assert sent["auth"] is True

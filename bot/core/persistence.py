@@ -31,11 +31,19 @@ class SQLiteStore:
             conn.execute(SCHEMA)
             conn.commit()
 
-    def log_trade(self, ts: int, symbol: str, side: str, qty: float, price: float, fee: float, is_maker: bool) -> None:
+    def log_trade(
+        self,
+        ts: int,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        fee: float,
+        is_maker: bool,
+    ) -> None:
         with sqlite3.connect(str(self.path)) as conn:
             conn.execute(
                 "INSERT INTO trades (ts, symbol, side, qty, price, fee, is_maker) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (ts, symbol, side, qty, price, fee, 1 if is_maker else 0),
             )
             conn.commit()
-

@@ -42,16 +42,27 @@ class Engine:
         fill_price = 0.0
         is_maker = False
         if marketable:
-            filled_qty, fill_price, is_maker = self.slippage.fill(order.side, order.qty, tick, available_liquidity)
+            filled_qty, fill_price, is_maker = self.slippage.fill(
+                order.side, order.qty, tick, available_liquidity
+            )
         else:
             # Maker: only fill if liquidity is zero (simulates resting and being picked off)
-            filled_qty, fill_price, is_maker = self.slippage.fill(order.side, order.qty, tick, 0.0)
+            filled_qty, fill_price, is_maker = self.slippage.fill(
+                order.side, order.qty, tick, 0.0
+            )
 
         if filled_qty > 0.0:
             notional = filled_qty * fill_price
             fee = self.fee_model.fee(notional, is_maker=is_maker)
             self.fills.append(
-                Fill(ts=tick.ts, side=order.side, qty=filled_qty, price=fill_price, fee=fee, is_maker=is_maker)
+                Fill(
+                    ts=tick.ts,
+                    side=order.side,
+                    qty=filled_qty,
+                    price=fill_price,
+                    fee=fee,
+                    is_maker=is_maker,
+                )
             )
             self.account.position.update_on_fill(self.fills[-1])
             self.account.balance -= fee

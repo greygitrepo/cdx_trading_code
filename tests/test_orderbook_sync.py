@@ -22,11 +22,23 @@ def test_snapshot_then_deltas_consistent() -> None:
 def test_sequence_gap_triggers_resnapshot() -> None:
     book = L2Book(symbol="BTCUSDT")
     events = [
-        {"type": "snapshot", "seq": 10, "ts": 1000, "bids": [[100.0, 1.0]], "asks": [[100.2, 2.0]]},
+        {
+            "type": "snapshot",
+            "seq": 10,
+            "ts": 1000,
+            "bids": [[100.0, 1.0]],
+            "asks": [[100.2, 2.0]],
+        },
         {"type": "delta", "seq": 11, "ts": 1001, "bids": [[100.1, 1.0]], "asks": []},
         # gap: jump to 13, should flag resnapshot
         {"type": "delta", "seq": 13, "ts": 1002, "bids": [[100.0, 0.0]], "asks": []},
-        {"type": "snapshot", "seq": 20, "ts": 1010, "bids": [[101.0, 3.0]], "asks": [[101.2, 1.0]]},
+        {
+            "type": "snapshot",
+            "seq": 20,
+            "ts": 1010,
+            "bids": [[101.0, 3.0]],
+            "asks": [[101.2, 1.0]],
+        },
     ]
     book, resnap = process_stream(book, events)
     assert resnap == 1

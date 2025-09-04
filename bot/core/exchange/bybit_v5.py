@@ -63,7 +63,9 @@ class BybitV5Client:
             pass
         if testnet is None:
             testnet = os.environ.get("TESTNET", "true").lower() == "true"
-        self.base_url = base_url or (DEFAULT_BASE_TESTNET if testnet else DEFAULT_BASE_MAINNET)
+        self.base_url = base_url or (
+            DEFAULT_BASE_TESTNET if testnet else DEFAULT_BASE_MAINNET
+        )
         self.recv_window_ms = recv_window_ms
         self._client = httpx.Client(timeout=timeout)
         self.default_category = category or os.environ.get("BYBIT_CATEGORY", "linear")
@@ -76,7 +78,10 @@ class BybitV5Client:
         # Exclude None values; Bybit expects keys sorted by ASCII
         items = [(k, v) for k, v in params.items() if v is not None]
         items.sort(key=lambda kv: kv[0])
-        return "&".join(f"{k}={kv if isinstance((kv := v), str) else json.dumps(v, separators=(',', ':'))}" for k, v in items)
+        return "&".join(
+            f"{k}={kv if isinstance((kv := v), str) else json.dumps(v, separators=(',', ':'))}"
+            for k, v in items
+        )
 
     @staticmethod
     def _minified_json(data: Dict[str, Any] | None) -> str:
@@ -93,7 +98,9 @@ class BybitV5Client:
     def _sign(self, ts_ms: int, payload: str) -> str:
         recv = str(self.recv_window_ms)
         prehash = self._build_prehash(str(ts_ms), self.api_key, recv, payload)
-        sig = hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).hexdigest()
+        sig = hmac.new(
+            self.api_secret.encode(), prehash.encode(), hashlib.sha256
+        ).hexdigest()
         return sig
 
     # -------- Core request --------
@@ -125,7 +132,9 @@ class BybitV5Client:
                 if method.upper() in {"GET", "DELETE"}:
                     # Exclude None values from query params for both signing and sending
                     if params:
-                        clean_params = {k: v for k, v in params.items() if v is not None}
+                        clean_params = {
+                            k: v for k, v in params.items() if v is not None
+                        }
                     else:
                         clean_params = None
                     payload_for_sign = self._canonical_query(clean_params)
@@ -159,12 +168,12 @@ class BybitV5Client:
             except httpx.RequestError:
                 if attempt >= max_retries:
                     raise
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
                 attempt += 1
                 continue
 
             if resp.status_code == 429 and attempt < max_retries:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
                 attempt += 1
                 continue
 
@@ -180,12 +189,16 @@ class BybitV5Client:
                 snippet = (body or "")[:200]
                 status = resp.status_code
                 hdrs = dict(resp.headers)
-                raise BybitAPIError(status, f"HTTP {status} non-JSON response: {snippet}", {"status": status, "headers": hdrs, "body": body})
+                raise BybitAPIError(
+                    status,
+                    f"HTTP {status} non-JSON response: {snippet}",
+                    {"status": status, "headers": hdrs, "body": body},
+                )
             ret_code = j.get("retCode", 0)
             if ret_code != 0:
                 # Retry on transient codes, else raise
                 if attempt < max_retries and ret_code in {10006, 10016, 10018, 110001}:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     attempt += 1
                     continue
                 raise BybitAPIError(ret_code, j.get("retMsg", "unknown"), j)
@@ -194,13 +207,17 @@ class BybitV5Client:
     # -------- Public market endpoints --------
     def get_symbols(self, category: Optional[str] = None) -> Dict[str, Any]:
         params = {"category": category or self.default_category}
-        return self._request("GET", "/v5/market/instruments-info", params=params, auth=False)
+        return self._request(
+            "GET", "/v5/market/instruments-info", params=params, auth=False
+        )
 
     # Backward/explicit alias per spec
     def get_instruments(self, category: Optional[str] = None) -> Dict[str, Any]:
         return self.get_symbols(category=category)
 
-    def get_orderbook(self, symbol: str, depth: int = 1, category: Optional[str] = None) -> Dict[str, Any]:
+    def get_orderbook(
+        self, symbol: str, depth: int = 1, category: Optional[str] = None
+    ) -> Dict[str, Any]:
         params = {
             "category": category or self.default_category,
             "symbol": symbol,
@@ -208,7 +225,9 @@ class BybitV5Client:
         }
         return self._request("GET", "/v5/market/orderbook", params=params, auth=False)
 
-    def get_tickers(self, category: Optional[str] = None, symbol: Optional[str] = None) -> Dict[str, Any]:
+    def get_tickers(
+        self, category: Optional[str] = None, symbol: Optional[str] = None
+    ) -> Dict[str, Any]:
         params = {"category": category or self.default_category, "symbol": symbol}
         return self._request("GET", "/v5/market/tickers", params=params, auth=False)
 
@@ -263,7 +282,9 @@ class BybitV5Client:
         }
         return self._request("POST", "/v5/order/cancel", data=payload, auth=True)
 
-    def get_open_orders(self, symbol: Optional[str] = None, *, category: Optional[str] = None) -> Dict[str, Any]:
+    def get_open_orders(
+        self, symbol: Optional[str] = None, *, category: Optional[str] = None
+    ) -> Dict[str, Any]:
         params = {
             "category": category or self.default_category,
             "symbol": symbol,
@@ -279,7 +300,9 @@ class BybitV5Client:
         settleCoin: Optional[str] = None,
     ) -> Dict[str, Any]:
         if symbol is None and settleCoin is None:
-            raise ValueError("Bybit v5 requires either symbol or settleCoin for positions list")
+            raise ValueError(
+                "Bybit v5 requires either symbol or settleCoin for positions list"
+            )
         params = {
             "category": category or self.default_category,
             "symbol": symbol,
@@ -287,19 +310,31 @@ class BybitV5Client:
         }
         return self._request("GET", "/v5/position/list", params=params, auth=True)
 
-    def get_wallet_balance(self, *, accountType: str = "UNIFIED", coin: Optional[str] = None) -> Dict[str, Any]:
+    def get_wallet_balance(
+        self, *, accountType: str = "UNIFIED", coin: Optional[str] = None
+    ) -> Dict[str, Any]:
         params = {"accountType": accountType, "coin": coin}
-        return self._request("GET", "/v5/account/wallet-balance", params=params, auth=True)
+        return self._request(
+            "GET", "/v5/account/wallet-balance", params=params, auth=True
+        )
 
-    def set_leverage(self, *, symbol: str, buyLeverage: int | float, sellLeverage: int | float,
-                     category: Optional[str] = None) -> Dict[str, Any]:
+    def set_leverage(
+        self,
+        *,
+        symbol: str,
+        buyLeverage: int | float,
+        sellLeverage: int | float,
+        category: Optional[str] = None,
+    ) -> Dict[str, Any]:
         payload = {
             "category": category or self.default_category,
             "symbol": symbol,
             "buyLeverage": str(buyLeverage),
             "sellLeverage": str(sellLeverage),
         }
-        return self._request("POST", "/v5/position/set-leverage", data=payload, auth=True)
+        return self._request(
+            "POST", "/v5/position/set-leverage", data=payload, auth=True
+        )
 
     def set_trading_stop(
         self,
@@ -321,7 +356,9 @@ class BybitV5Client:
             "tpTriggerBy": tpTriggerBy,
             "slTriggerBy": slTriggerBy,
         }
-        return self._request("POST", "/v5/position/trading-stop", data=payload, auth=True)
+        return self._request(
+            "POST", "/v5/position/trading-stop", data=payload, auth=True
+        )
 
     def close_position_market(
         self,
@@ -357,9 +394,15 @@ class BybitV5Client:
                     pf = it.get("priceFilter", {})
                     lf = it.get("lotSizeFilter", {})
                     return {
-                        "tickSize": float(pf.get("tickSize")) if pf.get("tickSize") is not None else None,
-                        "qtyStep": float(lf.get("qtyStep")) if lf.get("qtyStep") is not None else None,
-                        "minOrderQty": float(lf.get("minOrderQty")) if lf.get("minOrderQty") is not None else None,
+                        "tickSize": float(pf.get("tickSize"))
+                        if pf.get("tickSize") is not None
+                        else None,
+                        "qtyStep": float(lf.get("qtyStep"))
+                        if lf.get("qtyStep") is not None
+                        else None,
+                        "minOrderQty": float(lf.get("minOrderQty"))
+                        if lf.get("minOrderQty") is not None
+                        else None,
                         "priceFilter": pf,
                         "lotSizeFilter": lf,
                     }

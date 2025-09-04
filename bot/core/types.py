@@ -64,12 +64,18 @@ class Position:
             self.avg_price = fill.price
         elif self.side == fill.side:
             new_qty = self.qty + fill.qty
-            self.avg_price = (self.avg_price * self.qty + fill.price * fill.qty) / new_qty
+            self.avg_price = (
+                self.avg_price * self.qty + fill.price * fill.qty
+            ) / new_qty
             self.qty = new_qty
         else:
             # Closing or flipping
             close_qty = min(self.qty, fill.qty)
-            pnl_per_unit = (self.avg_price - fill.price) if self.side == Side.SELL else (fill.price - self.avg_price)
+            pnl_per_unit = (
+                (self.avg_price - fill.price)
+                if self.side == Side.SELL
+                else (fill.price - self.avg_price)
+            )
             self.realized_pnl += pnl_per_unit * close_qty
             self.qty -= close_qty
             if self.qty == 0.0:
@@ -90,4 +96,3 @@ class Position:
 class Account:
     balance: float
     position: Position = field(default_factory=Position)
-

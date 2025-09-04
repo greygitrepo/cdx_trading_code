@@ -46,8 +46,8 @@ jobs:
           if-no-files-found: warn
 
   ops_integration:
-    # Run on push and pull_request, but only when secrets are provided (fork PRs naturally skip)
-    if: ${{ secrets.BYBIT_API_KEY != '' && secrets.BYBIT_API_SECRET != '' }}
+    # Run only on push in this repo and only when BYBIT secrets are present
+    if: ${{ github.event_name == 'push' && secrets.BYBIT_API_KEY != '' && secrets.BYBIT_API_SECRET != '' }}
     runs-on: ubuntu-latest
     env:
       TESTNET: "true"

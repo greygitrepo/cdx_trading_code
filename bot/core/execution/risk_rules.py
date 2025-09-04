@@ -51,7 +51,10 @@ def check_balance_guard(ctx: RiskContext) -> tuple[bool, str]:
 def check_order_size(notional_usdt: float, equity_usdt: float) -> tuple[bool, str]:
     cap = max_alloc_notional(equity_usdt)
     if notional_usdt > cap:
-        return False, f"Order notional {notional_usdt:.2f} exceeds cap {cap:.2f} (MAX_ALLOC_PCT)"
+        return (
+            False,
+            f"Order notional {notional_usdt:.2f} exceeds cap {cap:.2f} (MAX_ALLOC_PCT)",
+        )
     return True, "ok"
 
 
@@ -65,7 +68,9 @@ def slippage_guard(intended_price: float, reference_price: float) -> tuple[bool,
     return True, "ok"
 
 
-def compute_tp_sl(entry_price: float, side: str, *, tp_pct: float, sl_pct: float) -> tuple[float, float]:
+def compute_tp_sl(
+    entry_price: float, side: str, *, tp_pct: float, sl_pct: float
+) -> tuple[float, float]:
     if side.upper() == "BUY":
         tp = entry_price * (1 + tp_pct)
         sl = entry_price * (1 - sl_pct)

@@ -12,4 +12,3 @@ def test_stub_orderbook_replay_and_gap_recovery() -> None:
     assert book.seq == 10
     assert book.best_bid() == (101.0, 3.0)
     assert book.best_ask() == (101.2, 1.0)
-

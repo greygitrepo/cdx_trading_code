@@ -26,20 +26,20 @@ def generate_report(path: Path, stats: dict | None = None) -> None:
     <div class="grid">
       <div class="card">
         <h3>Performance</h3>
-        <p>Trades: {stats.get('trades', 0)}</p>
-        <p>PnL: {stats.get('pnl', 0.0):.4f}</p>
+        <p>Trades: {stats.get("trades", 0)}</p>
+        <p>PnL: {stats.get("pnl", 0.0):.4f}</p>
       </div>
       <div class="card">
         <h3>Drawdown</h3>
-        <p>Max DD: {stats.get('max_dd', 0.0):.4f}</p>
+        <p>Max DD: {stats.get("max_dd", 0.0):.4f}</p>
       </div>
       <div class="card">
         <h3>Fill Quality</h3>
-        <p>Avg slippage (bps): {stats.get('slip_bps', 0.0):.2f}</p>
+        <p>Avg slippage (bps): {stats.get("slip_bps", 0.0):.2f}</p>
       </div>
       <div class="card">
         <h3>Distribution</h3>
-        <p>Win rate: {stats.get('win_rate', 0.0):.2%}</p>
+        <p>Win rate: {stats.get("win_rate", 0.0):.2%}</p>
       </div>
     </div>
   </body>

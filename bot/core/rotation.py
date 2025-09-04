@@ -86,7 +86,9 @@ def build_universe(client: BybitV5Client) -> Universe:
             tks = client.get_tickers(category=cat)
             items = tks.get("result", {}).get("list", [])
             # Filter USDT symbols and sort by turnover24h desc
-            filtered = [it for it in items if str(it.get("symbol", "")).endswith("USDT")]
+            filtered = [
+                it for it in items if str(it.get("symbol", "")).endswith("USDT")
+            ]
             for it in filtered:
                 # normalize numeric fields
                 for k in ("turnover24h", "volume24h"):
@@ -94,14 +96,21 @@ def build_universe(client: BybitV5Client) -> Universe:
                         it[k] = float(it.get(k) or 0)
                     except Exception:
                         it[k] = 0.0
-            filtered.sort(key=lambda x: (x.get("turnover24h", 0), x.get("volume24h", 0)), reverse=True)
+            filtered.sort(
+                key=lambda x: (x.get("turnover24h", 0), x.get("volume24h", 0)),
+                reverse=True,
+            )
             syms_ranked = [it.get("symbol") for it in filtered if it.get("symbol")]
         except Exception:
             syms_ranked = []
         # intersect with tradable if available; fallback whitelist for testnet
         syms = [s for s in syms_ranked if (not tradable or s in tradable)][:topn]
         if not syms:
-            syms = [s for s in ["BTCUSDT", "ETHUSDT", "SOLUSDT"] if (not tradable or s in tradable)]
+            syms = [
+                s
+                for s in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+                if (not tradable or s in tradable)
+            ]
         if syms:
             return Universe(symbols=syms, discovered=True)
     # 3) Fallback sensible defaults

@@ -22,8 +22,13 @@ class StrategyParams:
     rsi2_high: int = 96
 
 
-def mis_signal(closes: list[float], orderbook_imbalance: float, spread: float, spread_threshold: float,
-               params: StrategyParams) -> Tuple[Optional[Side], float]:
+def mis_signal(
+    closes: list[float],
+    orderbook_imbalance: float,
+    spread: float,
+    spread_threshold: float,
+    params: StrategyParams,
+) -> Tuple[Optional[Side], float]:
     if len(closes) < 3:
         return None, 0.0
     efast = ema(closes, params.ema_fast)
@@ -32,14 +37,20 @@ def mis_signal(closes: list[float], orderbook_imbalance: float, spread: float, s
     side: Optional[Side] = None
     if efast > eslow and orderbook_imbalance >= 0.60 and spread <= spread_threshold:
         side = Side.BUY
-        score = min(1.0, (efast - eslow) / max(1e-9, eslow) + orderbook_imbalance - 0.59)
+        score = min(
+            1.0, (efast - eslow) / max(1e-9, eslow) + orderbook_imbalance - 0.59
+        )
     elif efast < eslow and orderbook_imbalance <= 0.40 and spread <= spread_threshold:
         side = Side.SELL
-        score = min(1.0, (eslow - efast) / max(1e-9, eslow) + (0.41 - orderbook_imbalance))
+        score = min(
+            1.0, (eslow - efast) / max(1e-9, eslow) + (0.41 - orderbook_imbalance)
+        )
     return side, score
 
 
-def vrs_signal(closes: list[float], volumes: list[float], params: StrategyParams) -> Tuple[Optional[Side], float]:
+def vrs_signal(
+    closes: list[float], volumes: list[float], params: StrategyParams
+) -> Tuple[Optional[Side], float]:
     dev = vwap_deviation(closes, volumes)
     r = rsi2(closes)
     # Prioritize deviation side, then fall back to RSI extremes
@@ -54,7 +65,9 @@ def vrs_signal(closes: list[float], volumes: list[float], params: StrategyParams
     return None, 0.0
 
 
-def lsr_signal(wick_long: bool, trade_burst: bool, oi_drop: bool) -> Tuple[Optional[Side], float]:
+def lsr_signal(
+    wick_long: bool, trade_burst: bool, oi_drop: bool
+) -> Tuple[Optional[Side], float]:
     if trade_burst and oi_drop and wick_long:
         return Side.SELL, 1.0
     if trade_burst and oi_drop and not wick_long:
@@ -62,7 +75,11 @@ def lsr_signal(wick_long: bool, trade_burst: bool, oi_drop: bool) -> Tuple[Optio
     return None, 0.0
 
 
-def select_strategy(mis: Tuple[Optional[Side], float], vrs: Tuple[Optional[Side], float], lsr: Tuple[Optional[Side], float]) -> Tuple[Optional[str], Optional[Side]]:
+def select_strategy(
+    mis: Tuple[Optional[Side], float],
+    vrs: Tuple[Optional[Side], float],
+    lsr: Tuple[Optional[Side], float],
+) -> Tuple[Optional[str], Optional[Side]]:
     choices = []
     if mis[0] is not None:
         choices.append(("MIS", mis[1], mis[0]))

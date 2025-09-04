@@ -35,36 +35,143 @@ class StructLogger:
             f.write(event.to_jsonl() + "\n")
 
     # Signal scoring and decision
-    def log_signal(self, *, ts: int, symbol: str, scores: dict[str, Any], decision: Optional[str]) -> None:
-        self._write(BaseEvent(ts=ts, run_id=self.run_id, step="signal", symbol=symbol, meta={"scores": scores, "decision": decision}))
+    def log_signal(
+        self, *, ts: int, symbol: str, scores: dict[str, Any], decision: Optional[str]
+    ) -> None:
+        self._write(
+            BaseEvent(
+                ts=ts,
+                run_id=self.run_id,
+                step="signal",
+                symbol=symbol,
+                meta={"scores": scores, "decision": decision},
+            )
+        )
 
     # Order intent and placement result
-    def log_order(self, *, ts: int, symbol: str, plan: dict[str, Any], result: Optional[dict[str, Any]] = None) -> None:
-        self._write(BaseEvent(ts=ts, run_id=self.run_id, step="order", symbol=symbol, meta={"plan": plan, "result": result}))
+    def log_order(
+        self,
+        *,
+        ts: int,
+        symbol: str,
+        plan: dict[str, Any],
+        result: Optional[dict[str, Any]] = None,
+    ) -> None:
+        self._write(
+            BaseEvent(
+                ts=ts,
+                run_id=self.run_id,
+                step="order",
+                symbol=symbol,
+                meta={"plan": plan, "result": result},
+            )
+        )
 
     # Fill/Execution details
-    def log_fill(self, *, ts: int, symbol: str, side: str, price: float, qty: float, order_id: Optional[str] = None) -> None:
-        self._write(BaseEvent(ts=ts, run_id=self.run_id, step="fill", symbol=symbol, meta={"side": side, "price": price, "qty": qty, "order_id": order_id}))
+    def log_fill(
+        self,
+        *,
+        ts: int,
+        symbol: str,
+        side: str,
+        price: float,
+        qty: float,
+        order_id: Optional[str] = None,
+    ) -> None:
+        self._write(
+            BaseEvent(
+                ts=ts,
+                run_id=self.run_id,
+                step="fill",
+                symbol=symbol,
+                meta={"side": side, "price": price, "qty": qty, "order_id": order_id},
+            )
+        )
 
     # Cancel event
-    def log_cancel(self, *, ts: int, symbol: str, order_link_id: Optional[str], reason: Optional[str] = None) -> None:
-        self._write(BaseEvent(ts=ts, run_id=self.run_id, step="cancel", symbol=symbol, meta={"order_link_id": order_link_id, "reason": reason}))
+    def log_cancel(
+        self,
+        *,
+        ts: int,
+        symbol: str,
+        order_link_id: Optional[str],
+        reason: Optional[str] = None,
+    ) -> None:
+        self._write(
+            BaseEvent(
+                ts=ts,
+                run_id=self.run_id,
+                step="cancel",
+                symbol=symbol,
+                meta={"order_link_id": order_link_id, "reason": reason},
+            )
+        )
 
     # Risk checks outcome
-    def log_risk(self, *, ts: int, symbol: Optional[str], ok: bool, reason: str, context: Optional[dict[str, Any]] = None) -> None:
-        self._write(BaseEvent(ts=ts, run_id=self.run_id, step="risk", symbol=symbol, meta={"ok": ok, "reason": reason, "context": context or {}}))
+    def log_risk(
+        self,
+        *,
+        ts: int,
+        symbol: Optional[str],
+        ok: bool,
+        reason: str,
+        context: Optional[dict[str, Any]] = None,
+    ) -> None:
+        self._write(
+            BaseEvent(
+                ts=ts,
+                run_id=self.run_id,
+                step="risk",
+                symbol=symbol,
+                meta={"ok": ok, "reason": reason, "context": context or {}},
+            )
+        )
 
     # PnL snapshot (position close or periodic)
-    def log_pnl(self, *, ts: int, symbol: str, realized: float, unrealized: Optional[float] = None) -> None:
-        self._write(BaseEvent(ts=ts, run_id=self.run_id, step="pnl", symbol=symbol, meta={"realized": realized, "unrealized": unrealized}))
+    def log_pnl(
+        self,
+        *,
+        ts: int,
+        symbol: str,
+        realized: float,
+        unrealized: Optional[float] = None,
+    ) -> None:
+        self._write(
+            BaseEvent(
+                ts=ts,
+                run_id=self.run_id,
+                step="pnl",
+                symbol=symbol,
+                meta={"realized": realized, "unrealized": unrealized},
+            )
+        )
 
     # Generic info hook (e.g., orderbook snapshot)
-    def log_info(self, *, ts: int, symbol: Optional[str], tag: str, payload: dict[str, Any]) -> None:
-        self._write(BaseEvent(ts=ts, run_id=self.run_id, step=tag, symbol=symbol, meta=payload))
+    def log_info(
+        self, *, ts: int, symbol: Optional[str], tag: str, payload: dict[str, Any]
+    ) -> None:
+        self._write(
+            BaseEvent(ts=ts, run_id=self.run_id, step=tag, symbol=symbol, meta=payload)
+        )
 
     # Reasons for skipping/trade rejection at a step
-    def log_why_no_trade(self, *, ts: int, symbol: str, reasons: list[str], context: Optional[dict[str, Any]] = None) -> None:
-        self._write(BaseEvent(ts=ts, run_id=self.run_id, step="why_no_trade", symbol=symbol, meta={"reasons": reasons, **(context or {})}))
+    def log_why_no_trade(
+        self,
+        *,
+        ts: int,
+        symbol: str,
+        reasons: list[str],
+        context: Optional[dict[str, Any]] = None,
+    ) -> None:
+        self._write(
+            BaseEvent(
+                ts=ts,
+                run_id=self.run_id,
+                step="why_no_trade",
+                symbol=symbol,
+                meta={"reasons": reasons, **(context or {})},
+            )
+        )
 
 
 def init_run_dir(base_logs: Path, run_id: str) -> Path:

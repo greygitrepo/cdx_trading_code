@@ -47,11 +47,12 @@ class RuntimeConfig:
     modes: Modes
 
 
-def load_runtime(app_path: Path = Path("bot/configs/config.yaml"), params_path: Optional[Path] = None) -> RuntimeConfig:
+def load_runtime(
+    app_path: Path = Path("bot/configs/config.yaml"), params_path: Optional[Path] = None
+) -> RuntimeConfig:
     app = load_app_config(app_path)
     if params_path is None:
         params_path = Path("bot/configs/params_gumiho.yaml")
     params = load_params(params_path)
     modes = get_modes()
     return RuntimeConfig(app=app, params=params, modes=modes)
-

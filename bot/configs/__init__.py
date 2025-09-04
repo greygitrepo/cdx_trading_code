@@ -11,4 +11,3 @@ __all__ = [
     "load_app_config",
     "load_params",
 ]
-

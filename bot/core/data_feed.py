@@ -32,5 +32,5 @@ def make_generator(events: list[dict]) -> Callable[[], Iterable[dict]]:
     def _gen() -> Generator[dict, None, None]:
         for ev in events:
             yield ev
-    return _gen
 
+    return _gen

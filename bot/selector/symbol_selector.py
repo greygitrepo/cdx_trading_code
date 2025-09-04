@@ -9,7 +9,9 @@ from __future__ import annotations
 from typing import Iterable, List, Set
 
 
-def top_n(candidates: Iterable[str], n: int, *, exclude_symbols: Set[str] | None = None) -> List[str]:
+def top_n(
+    candidates: Iterable[str], n: int, *, exclude_symbols: Set[str] | None = None
+) -> List[str]:
     exclude = exclude_symbols or set()
     out: list[str] = []
     for s in candidates:

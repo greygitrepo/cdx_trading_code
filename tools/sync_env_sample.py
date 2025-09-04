@@ -53,7 +53,9 @@ def main() -> None:
 
     # Append missing keys with TODO placeholder
     with SAMPLE.open("a", encoding="utf-8") as f:
-        f.write("\n# --- Sync: auto-discovered keys (TODO: set appropriate values) ---\n")
+        f.write(
+            "\n# --- Sync: auto-discovered keys (TODO: set appropriate values) ---\n"
+        )
         for k in missing:
             f.write(f"# TODO: set {k}\n{k}=\n")
     print(f"Appended {len(missing)} keys to .env.sample")

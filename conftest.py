@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 
 def _has_testnet_creds() -> bool:
     import os
+
     return (
         os.getenv("TESTNET", "false").lower() == "true"
         and os.getenv("LIVE_MODE", "false").lower() == "true"
@@ -32,6 +33,7 @@ def _env_and_optional_block_network(monkeypatch):
         monkeypatch.setenv("PAPER_MODE", "true")
         monkeypatch.setenv("LIVE_MODE", "false")
         monkeypatch.setenv("TESTNET", "false")
+
         # Block network in unit/default runs
         def _no_network(*args, **kwargs):  # noqa: ANN001, D401
             raise RuntimeError("Network access blocked in tests/CI")

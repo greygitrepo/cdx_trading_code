@@ -13,5 +13,9 @@ def has_testnet_creds():
 
 def pytest_collection_modifyitems(config, items):
     for item in items:
-        if ("integration" in item.keywords or "ops" in item.keywords) and not has_testnet_creds():
-            item.add_marker(pytest.mark.skip(reason="No TESTNET creds/env for ops/integration"))
+        if (
+            "integration" in item.keywords or "ops" in item.keywords
+        ) and not has_testnet_creds():
+            item.add_marker(
+                pytest.mark.skip(reason="No TESTNET creds/env for ops/integration")
+            )

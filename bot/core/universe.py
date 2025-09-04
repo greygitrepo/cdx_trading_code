@@ -14,8 +14,13 @@ class SymbolMetrics:
     vol_rank: int
 
 
-def select_universe(items: List[SymbolMetrics], topN: int, spread_max_mult: float, min_depth_usd: float) -> list[str]:
-    filtered = [x for x in items if x.spread_mult <= spread_max_mult and x.depth_usd >= min_depth_usd]
+def select_universe(
+    items: List[SymbolMetrics], topN: int, spread_max_mult: float, min_depth_usd: float
+) -> list[str]:
+    filtered = [
+        x
+        for x in items
+        if x.spread_mult <= spread_max_mult and x.depth_usd >= min_depth_usd
+    ]
     filtered.sort(key=lambda x: x.vol_rank)
     return [x.symbol for x in filtered[:topN]]
-

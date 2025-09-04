@@ -15,8 +15,7 @@ class FeeModel(Protocol):
     def taker_rate(self) -> float:  # fraction, e.g., 0.00055
         ...
 
-    def fee(self, notional: float, is_maker: bool) -> float:
-        ...
+    def fee(self, notional: float, is_maker: bool) -> float: ...
 
 
 @dataclass(slots=True)
@@ -36,7 +35,9 @@ class SimpleFeeModel:
 
 
 class SlippageModel(Protocol):
-    def fill(self, order_side: Side, qty: float, tick: Tick, available_liquidity: float) -> tuple[float, float, bool]:
+    def fill(
+        self, order_side: Side, qty: float, tick: Tick, available_liquidity: float
+    ) -> tuple[float, float, bool]:
         """Compute (filled_qty, fill_price, is_maker)."""
         ...
 
@@ -53,7 +54,9 @@ class SimpleSlippage:
             return price * factor
         return price / factor
 
-    def fill(self, order_side: Side, qty: float, tick: Tick, available_liquidity: float) -> tuple[float, float, bool]:
+    def fill(
+        self, order_side: Side, qty: float, tick: Tick, available_liquidity: float
+    ) -> tuple[float, float, bool]:
         # For a BUY, hit ask (taker) or place at bid (maker). For SELL, inverse.
         taker_price = tick.ask if order_side == Side.BUY else tick.bid
         maker_price = tick.bid if order_side == Side.BUY else tick.ask

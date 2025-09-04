@@ -43,6 +43,9 @@ def test_fault_recovery_backoff_passes():
     base = BybitClientTestnet()
     ex = FlakyWrapper(base, fail_first_n=2)
     sm = SlotManager(max_slots=2)
-    orch = Orchestrator(ex=ex, slot_mgr=sm, leverage=5.0, max_symbols=2, total_budget_usdt=200.0)
-    orch.run_loop(max_ticks=1, bootstrap_candidates=["BTCUSDT", "ETHUSDT"], backoff_max=3)
-
+    orch = Orchestrator(
+        ex=ex, slot_mgr=sm, leverage=5.0, max_symbols=2, total_budget_usdt=200.0
+    )
+    orch.run_loop(
+        max_ticks=1, bootstrap_candidates=["BTCUSDT", "ETHUSDT"], backoff_max=3
+    )

@@ -23,8 +23,16 @@ def load_events(fp: Path) -> List[Dict[str, Any]]:
 
 
 def compute_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    signals = [e for e in events if e.get("step") == "signal" and e.get("meta", {}).get("decision")]
-    orders = [e for e in events if e.get("step") == "order" and e.get("meta", {}).get("result")]
+    signals = [
+        e
+        for e in events
+        if e.get("step") == "signal" and e.get("meta", {}).get("decision")
+    ]
+    orders = [
+        e
+        for e in events
+        if e.get("step") == "order" and e.get("meta", {}).get("result")
+    ]
     cancels = [e for e in events if e.get("step") == "cancel"]
     fills = [e for e in events if e.get("step") == "fill"]
 
@@ -43,7 +51,9 @@ def compute_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         if price is None:
             continue
         # approximate: look back for last order
-        prior = next((o for o in reversed(orders) if o.get("ts", 0) <= e.get("ts", 0)), None)
+        prior = next(
+            (o for o in reversed(orders) if o.get("ts", 0) <= e.get("ts", 0)), None
+        )
         if prior:
             plan_price = prior.get("meta", {}).get("plan", {}).get("price")
             ref = plan_price
@@ -80,7 +90,9 @@ def write_html(out_fp: Path, run_id: str, summary: Dict[str, Any]) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Build quick-test HTML report from structured events")
+    ap = argparse.ArgumentParser(
+        description="Build quick-test HTML report from structured events"
+    )
     ap.add_argument("--run_id", required=True)
     args = ap.parse_args()
 

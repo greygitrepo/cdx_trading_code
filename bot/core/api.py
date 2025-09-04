@@ -57,15 +57,18 @@ class BybitREST:
             params["symbol"] = symbol
         return self._get("/v5/market/tickers", params)
 
-    def funding_history(self, category: str = "linear", symbol: str | None = None) -> dict:
+    def funding_history(
+        self, category: str = "linear", symbol: str | None = None
+    ) -> dict:
         params: dict[str, Any] = {"category": category}
         if symbol:
             params["symbol"] = symbol
         return self._get("/v5/market/funding/history", params)
 
-    def open_interest(self, category: str = "linear", symbol: str | None = None) -> dict:
+    def open_interest(
+        self, category: str = "linear", symbol: str | None = None
+    ) -> dict:
         params: dict[str, Any] = {"category": category}
         if symbol:
             params["symbol"] = symbol
         return self._get("/v5/market/open-interest", params)
-

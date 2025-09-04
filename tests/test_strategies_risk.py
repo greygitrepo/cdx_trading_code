@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
-from bot.core.strategies import StrategyParams, mis_signal, vrs_signal, lsr_signal, select_strategy
+from bot.core.strategies import (
+    StrategyParams,
+    mis_signal,
+    vrs_signal,
+    lsr_signal,
+    select_strategy,
+)
 from bot.core.risk import position_size, compute_stops, daily_loss_gate
 from bot.core.types import Side
 
 
 def test_mis_long_signal_and_select() -> None:
     closes = [100, 100.1, 100.2, 100.3, 100.4]
-    side, score = mis_signal(closes, orderbook_imbalance=0.65, spread=0.0003, spread_threshold=0.0004, params=StrategyParams())
+    side, score = mis_signal(
+        closes,
+        orderbook_imbalance=0.65,
+        spread=0.0003,
+        spread_threshold=0.0004,
+        params=StrategyParams(),
+    )
     assert side == Side.BUY and score > 0.0
     name, chosen = select_strategy((side, score), (None, 0.0), (None, 0.0))
     assert name == "MIS" and chosen == Side.BUY
@@ -35,4 +47,7 @@ def test_risk_and_stops() -> None:
     assert size == 0.5
     stops = compute_stops(entry=100.0, tp=0.001, sl=0.002, trail=0.0008, side_long=True)
     assert stops.stop_loss == 99.8 and stops.take_profit == 100.1
-    assert daily_loss_gate(equity_start=100.0, equity_now=97.9, daily_max_loss=0.02) is True
+    assert (
+        daily_loss_gate(equity_start=100.0, equity_now=97.9, daily_max_loss=0.02)
+        is True
+    )

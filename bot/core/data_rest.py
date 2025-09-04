@@ -24,8 +24,13 @@ def _read_stub(name: str) -> dict:
 
 
 class REST:
-    def __init__(self, base_url: str = "https://api.bybit.com", timeout: float = 5.0, retries: int = 2,
-                 client_factory: Callable[[str, float], httpx.Client] | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str = "https://api.bybit.com",
+        timeout: float = 5.0,
+        retries: int = 2,
+        client_factory: Callable[[str, float], httpx.Client] | None = None,
+    ) -> None:
         self.base_url = base_url
         self.timeout = timeout
         self.retries = retries
@@ -77,7 +82,9 @@ class REST:
             params["symbol"] = symbol
         return self._get("/v5/market/funding/history", params)
 
-    def open_interest(self, category: str = "linear", symbol: str | None = None) -> dict:
+    def open_interest(
+        self, category: str = "linear", symbol: str | None = None
+    ) -> dict:
         params: dict[str, Any] = {"category": category}
         if symbol:
             params["symbol"] = symbol
@@ -85,4 +92,3 @@ class REST:
 
     def server_time(self) -> dict:
         return self._get("/v5/market/time", None)
-

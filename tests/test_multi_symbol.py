@@ -12,7 +12,11 @@ from bot.core.orchestrator import plan_entries, compute_per_symbol_budget
 def read_jsonl(fp: Path) -> list[dict]:
     if not fp.exists():
         return []
-    return [json.loads(line) for line in fp.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        json.loads(line)
+        for line in fp.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 @pytest.mark.unit
@@ -35,7 +39,10 @@ def test_budget_split_and_qty_rounding(tmp_path: Path, monkeypatch):
     positions = set()
     prices = {s: 100.0 for s in symbols_ranked}
     leverage = 5.0
-    rules = {s: {"lot_step": 0.001, "tick_size": 0.01, "min_qty": 0.001} for s in symbols_ranked}
+    rules = {
+        s: {"lot_step": 0.001, "tick_size": 0.01, "min_qty": 0.001}
+        for s in symbols_ranked
+    }
     intents = plan_entries(
         symbols_ranked=symbols_ranked,
         slot_mgr=mgr,  # SlotManager from slot_manager works via orchestrator interface
@@ -74,7 +81,9 @@ def test_min_qty_and_slot_lifecycle(tmp_path: Path, monkeypatch):
     open_orders = set()
     positions = {"BTCUSDT"}
     prices = {s: 200.0 for s in symbols_ranked}
-    rules = {s: {"lot_step": 0.05, "tick_size": 0.01, "min_qty": 1.0} for s in symbols_ranked}
+    rules = {
+        s: {"lot_step": 0.05, "tick_size": 0.01, "min_qty": 1.0} for s in symbols_ranked
+    }
     intents = plan_entries(
         symbols_ranked=symbols_ranked,
         slot_mgr=mgr,

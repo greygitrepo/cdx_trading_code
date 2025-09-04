@@ -14,4 +14,3 @@ def test_run_paper_generates_report(tmp_path: Path, monkeypatch):
     main()
     out = Path("reports/paper.html")
     assert out.exists() and out.stat().st_size > 0
-

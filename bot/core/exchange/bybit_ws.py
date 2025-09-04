@@ -44,7 +44,9 @@ class BybitPrivateWS:
         on_error: Optional[Callable[[Exception], None]] = None,
     ) -> None:
         if websocket is None:
-            raise RuntimeError("websocket-client is required for private WS; please install it")
+            raise RuntimeError(
+                "websocket-client is required for private WS; please install it"
+            )
         self.api_key = api_key or os.environ.get("BYBIT_API_KEY", "")
         self.api_secret = api_secret or os.environ.get("BYBIT_API_SECRET", "")
         if testnet is None:
@@ -59,7 +61,9 @@ class BybitPrivateWS:
 
     def _sign(self, ts_ms: int) -> str:
         prehash = f"{ts_ms}{self.api_key}{self.recv_window_ms}"
-        return hmac.new(self.api_secret.encode(), prehash.encode(), hashlib.sha256).hexdigest()
+        return hmac.new(
+            self.api_secret.encode(), prehash.encode(), hashlib.sha256
+        ).hexdigest()
 
     def _on_open(self, ws: "websocket.WebSocketApp") -> None:  # noqa: ARG002
         ts = int(time.time() * 1000)
@@ -92,13 +96,17 @@ class BybitPrivateWS:
         if self.on_error:
             self.on_error(error)
 
-    def _on_close(self, ws: "websocket.WebSocketApp", status_code: int, msg: str) -> None:  # noqa: ARG002
+    def _on_close(
+        self, ws: "websocket.WebSocketApp", status_code: int, msg: str
+    ) -> None:  # noqa: ARG002
         # Will reconnect in run loop if not stopped
         pass
 
     def start(self) -> None:
         if websocket is None:
-            raise RuntimeError("websocket-client is required for private WS; please install it")
+            raise RuntimeError(
+                "websocket-client is required for private WS; please install it"
+            )
         self._should_stop.clear()
         self.ws = websocket.WebSocketApp(
             self.url,
@@ -132,4 +140,3 @@ class BybitPrivateWS:
             pass
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
-

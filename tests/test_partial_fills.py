@@ -10,7 +10,11 @@ from bot.core.types import Account, Order, OrderType, Side, Tick
 
 def test_partial_fill_accumulates_and_updates_position() -> None:
     acc = Account(balance=100.0)
-    engine = Engine(account=acc, fee_model=SimpleFeeModel(maker=0.0002, taker=0.00055), slippage=SimpleSlippage(maker_bps=0.0, taker_bps=0.0))
+    engine = Engine(
+        account=acc,
+        fee_model=SimpleFeeModel(maker=0.0002, taker=0.00055),
+        slippage=SimpleSlippage(maker_bps=0.0, taker_bps=0.0),
+    )
 
     order = Order(side=Side.BUY, qty=10.0, type=OrderType.LIMIT, limit_price=100.0)
     engine.place(order)
@@ -33,4 +37,6 @@ def test_partial_fill_accumulates_and_updates_position() -> None:
     # Fees charged (all taker): 10 * 100 * 0.00055 = 0.55
     assert acc.position.fees_paid == 10.0 * 100.0 * 0.00055
     # Allow tiny float rounding
-    assert acc.balance == pytest.approx(100.0 - acc.position.fees_paid, rel=1e-12, abs=1e-12)
+    assert acc.balance == pytest.approx(
+        100.0 - acc.position.fees_paid, rel=1e-12, abs=1e-12
+    )
