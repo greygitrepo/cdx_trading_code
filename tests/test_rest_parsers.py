@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
+import pytest
+
 from bot.core.data_rest import REST
 
 
-def test_instruments_and_tickers_stub() -> None:
+@pytest.mark.unit
+def test_instruments_and_tickers_stub(monkeypatch) -> None:
+    # Force stub mode even when integration env is present
+    monkeypatch.setenv("STUB_MODE", "true")
+    monkeypatch.setenv("LIVE_MODE", "false")
+    monkeypatch.setenv("TESTNET", "false")
     api = REST()
     ins = api.instruments()
     assert ins["result"]["list"][0]["symbol"] == "BTCUSDT"
     t = api.tickers(category="linear")
     assert t["result"]["list"][0]["symbol"] == "BTCUSDT"
 
-
-def test_funding_oi_and_time_stub() -> None:
+@pytest.mark.unit
+def test_funding_oi_and_time_stub(monkeypatch) -> None:
+    # Force stub mode
+    monkeypatch.setenv("STUB_MODE", "true")
+    monkeypatch.setenv("LIVE_MODE", "false")
+    monkeypatch.setenv("TESTNET", "false")
     api = REST()
     f = api.funding()
     oi = api.open_interest()
