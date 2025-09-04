@@ -46,7 +46,8 @@ jobs:
           if-no-files-found: warn
 
   ops_integration:
-    if: ${{ secrets.BYBIT_API_KEY && secrets.BYBIT_API_SECRET }}
+    # Only run when pushing in the main repo AND secrets are provided
+    if: ${{ github.event_name == 'push' && secrets.BYBIT_API_KEY != '' && secrets.BYBIT_API_SECRET != '' }}
     runs-on: ubuntu-latest
     env:
       TESTNET: "true"
@@ -67,6 +68,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: verify secrets presence
+        run: |
+          test -n "${BYBIT_API_KEY}" || (echo "BYBIT_API_KEY missing"; exit 1)
+          test -n "${BYBIT_API_SECRET}" || (echo "BYBIT_API_SECRET missing"; exit 1)
       - name: Pytest (ops+integration)
         run: pytest -q -m "ops or integration" --maxfail=1 --disable-warnings
       - name: Upload paper report
