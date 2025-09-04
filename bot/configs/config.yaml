@@ -1,0 +1,52 @@
+exchange:
+  name: bybit
+  network: testnet
+  category: linear
+  symbols: [BTCUSDT]
+  prefer_maker_bps_threshold: 0.04
+  maker_post_only: true
+  taker_on_strong_score: true
+  fallback_ioc: true
+
+risk:
+  max_leverage: 10
+  risk_per_trade_min: 0.003
+  risk_per_trade_max: 0.006
+  daily_max_loss: 0.02
+  per_symbol_concentration: 0.40
+
+params:
+  universe:
+    topN: 12
+    spread_max_mult: 1.5
+    depth_drop_pause: 0.70
+    vwap_dev_for_vrs: 0.0035
+  regime:
+    crash_z: 4.0
+    spread_mult_pause: 3.0
+    pause_minutes: 3
+    resume_rv_z: 1.5
+    resume_spread_mult: 1.3
+    resume_depth_recover: 0.80
+    oi_drop_pct: 2.0
+  indicators:
+    ema_fast: 3
+    ema_slow: 9
+    adx_len: 7
+    keltner_len: 20
+    keltner_mult: 1.25
+    rsi2_low: 4
+    rsi2_high: 96
+  orderbook:
+    obi_window_ms: 1500
+    obi_threshold_mis: 0.60
+    min_depth_usd: 15000
+  entry_exit:
+    tp1: 0.0010
+    trail_after_tp1: 0.0008
+    time_stop_mis: "30-40"
+    time_stop_vrs: "20-30"
+    time_stop_lsr: "15-25"
+  funding_time:
+    avoid_taker_within_min: 5
+
