@@ -48,6 +48,7 @@ What it does
 - Validates API key via `/v5/account/wallet-balance` and logs result
 - Loads instrument filters (tickSize/qtyStep/minQty) and sets leverage
 - Starts a timed loop: regime checks → strategy scoring(MIS/VRS/LSR) → order routing (maker/taker) → reflect (orders/positions) → cancel (smoke)
+- Rotates across symbols when no strategy consensus after `CONSENSUS_TICKS` (see Universe & Rotation envs). Press `EXIT_KEY` (default `q`) to stop.
 - Applies precision-aware sizing, funding-window avoidance, trailing/TP/SL, and time-stop
 
 Safety and notes
@@ -73,3 +74,4 @@ Env highlights
 - Default app config: `bot/configs/config.yaml`
 - Parameter pack: `bot/configs/params_gumiho.yaml`
 You can load/validate them via `bot.configs.schemas.load_app_config` and `load_params`.
+- Universe/Rotation: `SYMBOL_UNIVERSE`, `DISCOVER_SYMBOLS`, `UNIVERSE_TOP_N`, `CONSENSUS_TICKS`, `NO_TRADE_SLEEP_SEC`, `LOOP_IDLE_SEC`, `EXIT_KEY`, `ORDER_SIZE_USDT`

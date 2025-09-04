@@ -34,6 +34,7 @@ from bot.core.execution.risk_rules import RiskContext, check_balance_guard, chec
 from bot.core.strategy_runner import build_order_plan  # noqa: E402
 from bot.core.strategies import StrategyParams, mis_signal, vrs_signal, lsr_signal, select_strategy  # noqa: E402
 from bot.core.indicators import Rolling  # noqa: E402
+from bot.core.rotation import build_universe, ExitFlag  # noqa: E402
 try:
     from bot.core.exchange.bybit_ws import BybitPrivateWS  # type: ignore # noqa: E402
 except Exception:  # noqa: BLE001
@@ -85,7 +86,7 @@ def main() -> None:
     client = BybitV5Client()
     symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
     category = os.environ.get("BYBIT_CATEGORY", "linear")
-    leverage = float(os.environ.get("LEVERAGE", "10"))
+    leverage = float(os.environ.get("LEVERAGE", os.environ.get("LEVERAGE_DEFAULT", "10")))
     enable_ws = os.environ.get("ENABLE_PRIVATE_WS", "false").lower() == "true"
     # Regime/signal thresholds
     spread_threshold = float(os.environ.get("MIS_SPREAD_THRESHOLD", "0.0004"))
@@ -114,22 +115,9 @@ def main() -> None:
         pass
     logger.info(f"Equity={equity:.2f} USDT, Free={free:.2f} USDT")
 
-    # 1.5) Load instrument filters & set leverage
-    try:
-        ins = client.get_instruments(category=category)
-        flt = client.extract_symbol_filters(ins, symbol)
-        logger.info(
-            f"Instrument filters for {symbol}: tickSize={flt.get('tickSize')} qtyStep={flt.get('qtyStep')} minQty={flt.get('minOrderQty')}"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to fetch instrument filters: {e}")
-        flt = {"tickSize": None, "qtyStep": None, "minOrderQty": None}
-
-    try:
-        client.set_leverage(symbol=symbol, buyLeverage=int(leverage), sellLeverage=int(leverage), category=category)
-        logger.info("Leverage set OK")
-    except BybitAPIError as e:
-        logger.warning(f"Set leverage failed: {e}")
+    # Build symbol universe
+    uni = build_universe(client)
+    logger.info(f"Universe: {len(uni.symbols)} symbols ({'discovered' if uni.discovered else 'static'}) -> {uni.symbols}")
 
     # Optional: start private WS for live event logging
     ws = None
@@ -147,15 +135,48 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Private WS failed to start: {e}")
 
-    # 2) Timed loop: signal -> order -> reflect -> cancel (smoke)
-    loop_interval = float(os.environ.get("LOOP_INTERVAL_SEC", "5"))
-    max_iters = int(os.environ.get("MAX_ITERS", "3"))
-    mids: list[float] = []
-    closes = Rolling(maxlen=120)
-    vols = Rolling(maxlen=120)
+    # Rotation loop config
+    loop_interval = float(os.environ.get("NO_TRADE_SLEEP_SEC", os.environ.get("LOOP_INTERVAL_SEC", "5")))
+    consensus_ticks = int(os.environ.get("CONSENSUS_TICKS", "3"))
+    loop_idle = float(os.environ.get("LOOP_IDLE_SEC", "1"))
+    fixed_notional = float(os.environ.get("ORDER_SIZE_USDT", "0") or 0)
+    exit_flag = ExitFlag()
+    idx = 0
 
-    for i in range(max_iters):
-        ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
+    while not exit_flag.check():
+        symbol = uni.symbols[idx % max(1, len(uni.symbols))]
+        idx += 1
+
+        # 1.5) Load instrument filters & set leverage
+        try:
+            ins = client.get_instruments(category=category)
+            flt = client.extract_symbol_filters(ins, symbol)
+            logger.info(
+                f"Instrument filters for {symbol}: tickSize={flt.get('tickSize')} qtyStep={flt.get('qtyStep')} minQty={flt.get('minOrderQty')}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch instrument filters: {e}")
+            flt = {"tickSize": None, "qtyStep": None, "minOrderQty": None}
+
+        try:
+            client.set_leverage(symbol=symbol, buyLeverage=int(leverage), sellLeverage=int(leverage), category=category)
+            logger.info("Leverage set OK")
+        except BybitAPIError as e:
+            if getattr(e, "ret_code", None) == 110043:
+                logger.info("Leverage unchanged (110043): desired leverage already set")
+            else:
+                logger.warning(f"Set leverage failed: {e}")
+
+        # Per-symbol tick loop
+        mids: list[float] = []
+        closes = Rolling(maxlen=120)
+        vols = Rolling(maxlen=120)
+        traded = False
+
+        for i in range(consensus_ticks):
+            if exit_flag.check():
+                break
+            ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
         write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "orderbook", "data": ob.get("result", {})})
         try:
             bids = ob["result"]["b"]
@@ -176,7 +197,7 @@ def main() -> None:
         vols.add(max(0.0, bid_sz + ask_sz))
         if len(mids) > 50:
             mids.pop(0)
-        logger.info(f"[{i+1}/{max_iters}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}")
+            logger.info(f"[{symbol} {i+1}/{consensus_ticks}] mid={mid:.2f} spread={spread:.5f} obi={obi:.2f}")
 
         # Regime pause checks (liquidity/spread)
         if spread >= spread_threshold * spread_pause_mult or (bid_sz + ask_sz) * mid < min_depth_usd:
@@ -185,21 +206,21 @@ def main() -> None:
             continue
 
         # 3) Strategy pack scoring (MIS/VRS/LSR) and selection
-        sp = StrategyParams()
-        mis = mis_signal(closes.list(), orderbook_imbalance=(obi + 1) / 2, spread=spread, spread_threshold=spread_threshold, params=sp)
-        vrs = vrs_signal(closes.list(), vols.list(), sp)
-        # Heuristic for LSR inputs
-        wick_long = False
-        trade_burst = (bid_sz + ask_sz) > 0 and vols.list() and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
-        oi_drop = False  # not available without OI feed
-        lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
-        strat_name, strat_side = select_strategy(mis, vrs, lsr)
-        if strat_name is None or strat_side is None:
-            logger.info("No strategy consensus; sleeping")
-            time.sleep(loop_interval)
-            continue
-        signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
-        logger.info(f"Strategy selected: {strat_name} -> {('BUY' if signal>0 else 'SELL')}")
+            sp = StrategyParams()
+            mis = mis_signal(closes.list(), orderbook_imbalance=(obi + 1) / 2, spread=spread, spread_threshold=spread_threshold, params=sp)
+            vrs = vrs_signal(closes.list(), vols.list(), sp)
+            # Heuristic for LSR inputs
+            wick_long = False
+            trade_burst = (bid_sz + ask_sz) > 0 and vols.list() and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
+            oi_drop = False  # not available without OI feed
+            lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
+            strat_name, strat_side = select_strategy(mis, vrs, lsr)
+            if strat_name is None or strat_side is None:
+                logger.info("No strategy consensus; sleeping")
+                time.sleep(loop_interval)
+                continue
+            signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
+            logger.info(f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal>0 else 'SELL')}")
 
         prefer_limit = spread <= 0.0005
         # Avoid taker near funding if configured and nextFundingTime is close
@@ -217,18 +238,19 @@ def main() -> None:
                         continue
         except Exception:
             pass
-        plan = build_order_plan(
-            signal=signal,
-            last_price=mid,
-            equity_usdt=equity,
-            symbol=symbol,
-            leverage=leverage,
-            price_tick=flt.get("tickSize"),
-            qty_step=flt.get("qtyStep"),
-            min_qty=flt.get("minOrderQty"),
-            prefer_limit=prefer_limit,
-            post_only=prefer_limit,
-        )
+            plan = build_order_plan(
+                signal=signal,
+                last_price=mid,
+                equity_usdt=equity,
+                symbol=symbol,
+                leverage=leverage,
+                price_tick=flt.get("tickSize"),
+                qty_step=flt.get("qtyStep"),
+                min_qty=flt.get("minOrderQty"),
+                prefer_limit=prefer_limit,
+                post_only=prefer_limit,
+                fixed_notional_usdt=(fixed_notional if fixed_notional > 0 else None),
+            )
         logger.info(
             f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
         )
@@ -256,25 +278,26 @@ def main() -> None:
             time.sleep(loop_interval)
             continue
 
-        # 4) Place order and then cancel for smoke
-        try:
-            res = client.place_order(
-                symbol=plan.symbol,
-                side=plan.side,
-                qty=str(round(plan.qty, 6)),
-                orderType=plan.order_type,
-                timeInForce=plan.tif,
-                price=str(plan.price) if plan.price is not None else None,
-                orderLinkId=plan.order_link_id,
-                takeProfit=str(plan.tp) if plan.tp else None,
-                stopLoss=str(plan.sl) if plan.sl else None,
-            )
-            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_create", "data": res})
-            logger.info("Order placed")
-        except BybitAPIError as e:
-            logger.error(f"Place order failed: {e}")
-            time.sleep(loop_interval)
-            continue
+            # 4) Place order and then cancel for smoke
+            try:
+                res = client.place_order(
+                    symbol=plan.symbol,
+                    side=plan.side,
+                    qty=str(round(plan.qty, 6)),
+                    orderType=plan.order_type,
+                    timeInForce=plan.tif,
+                    price=str(plan.price) if plan.price is not None else None,
+                    orderLinkId=plan.order_link_id,
+                    takeProfit=str(plan.tp) if plan.tp else None,
+                    stopLoss=str(plan.sl) if plan.sl else None,
+                )
+                write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_create", "data": res})
+                logger.info("Order placed")
+                traded = True
+            except BybitAPIError as e:
+                logger.error(f"Place order failed: {e}")
+                time.sleep(loop_interval)
+                continue
 
         # Reflect open orders and positions
         try:
@@ -328,15 +351,21 @@ def main() -> None:
         except BybitAPIError as e:
             logger.warning(f"Positions fetch failed: {e}")
 
-        # Try to cancel by orderLinkId for smoke
-        try:
-            cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
-            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_cancel", "data": cres})
-            logger.info("Order cancel sent")
-        except BybitAPIError as e:
-            logger.error(f"Cancel failed: {e}")
+            # Try to cancel by orderLinkId for smoke
+            try:
+                cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
+                write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "order_cancel", "data": cres})
+                logger.info("Order cancel sent")
+            except BybitAPIError as e:
+                logger.error(f"Cancel failed: {e}")
 
-        time.sleep(loop_interval)
+            time.sleep(loop_interval)
+
+        if not traded:
+            logger.info(f"No consensus for {symbol} after {consensus_ticks} ticks → rotating")
+            time.sleep(loop_idle)
+
+    logger.info("Exit requested; stopping rotation loop")
 
     # Graceful WS shutdown if enabled
     try:
