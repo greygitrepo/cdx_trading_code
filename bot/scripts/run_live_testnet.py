@@ -126,7 +126,7 @@ def main() -> None:
         flt = {"tickSize": None, "qtyStep": None, "minOrderQty": None}
 
     try:
-        sr = client.set_leverage(symbol=symbol, buyLeverage=int(leverage), sellLeverage=int(leverage), category=category)
+        client.set_leverage(symbol=symbol, buyLeverage=int(leverage), sellLeverage=int(leverage), category=category)
         logger.info("Leverage set OK")
     except BybitAPIError as e:
         logger.warning(f"Set leverage failed: {e}")
@@ -337,15 +337,14 @@ def main() -> None:
             logger.error(f"Cancel failed: {e}")
 
         time.sleep(loop_interval)
-    
+
+    # Graceful WS shutdown if enabled
+    try:
+        if enable_ws and 'ws' in locals() and ws is not None:
+            ws.stop()
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        # Best-effort WS shutdown if enabled
-        try:
-            if 'ws' in locals() and ws is not None:
-                ws.stop()
-        except Exception:
-            pass
+    main()
