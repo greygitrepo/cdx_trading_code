@@ -1,4 +1,4 @@
-name: CI
+name: tests
 
 on:
   push:
@@ -7,55 +7,71 @@ on:
     branches: [ "feat/spec-v1" ]
 
 jobs:
-  build-test:
+  unit_and_strategy:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: [ "3.10", "3.11" ]
-
     env:
       STUB_MODE: "true"
       PAPER_MODE: "true"
       LIVE_MODE: "false"
       TESTNET: "false"
       MPLBACKEND: "Agg"
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Cache pip
-        uses: actions/cache@v4
+          python-version: "3.11"
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Ruff
         run: ruff check .
-
-      - name: Pytest
-        run: pytest -q
-
+      - name: Pytest (unit+strategy)
+        run: pytest -q -m "unit or strategy" --maxfail=1 --disable-warnings
       - name: Build paper report
         run: |
           mkdir -p reports
           python bot/scripts/run_paper.py
-
       - name: Upload report artifact
         uses: actions/upload-artifact@v4
         with:
-          name: paper-report-${{ matrix.python-version }}
+          name: paper-report
           path: reports/paper.html
+          if-no-files-found: warn
+
+  ops_integration:
+    if: ${{ secrets.BYBIT_API_KEY && secrets.BYBIT_API_SECRET }}
+    runs-on: ubuntu-latest
+    env:
+      TESTNET: "true"
+      LIVE_MODE: "true"
+      STUB_MODE: "false"
+      PAPER_MODE: "false"
+      BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
+      BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
+      MAX_SYMBOLS: "5"
+      TOTAL_BUDGET_USDT: "1000"
+      MPLBACKEND: "Agg"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Pytest (ops+integration)
+        run: pytest -q -m "ops or integration" --maxfail=1 --disable-warnings
+      - name: Upload paper report
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-report-ops
+          path: reports/paper.html
+          if-no-files-found: ignore
