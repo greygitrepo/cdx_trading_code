@@ -416,10 +416,11 @@ class BybitV5Client:
         category: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Close position with a market reduce-only order."""
+        canon_side = _canon_side(side)
         payload = {
             "category": category or self.default_category,
             "symbol": symbol,
-            "side": side,
+            "side": canon_side,
             "orderType": "Market",
             "qty": str(qty),
             "reduceOnly": True,

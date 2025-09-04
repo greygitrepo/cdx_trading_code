@@ -177,6 +177,7 @@ def test_close_position_market_payload(monkeypatch):
     assert sent["method"] == "POST"
     assert sent["path"] == "/v5/order/create"
     assert sent["auth"] is True
+    assert sent["data"]["side"] == "Sell"
     assert sent["data"]["reduceOnly"] is True
     assert sent["data"]["orderType"] == "Market"
 
