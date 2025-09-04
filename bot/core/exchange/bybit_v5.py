@@ -112,12 +112,25 @@ class BybitV5Client:
         ts_ms = int(time.time() * 1000)
         attempt = 0
         while True:
+            # Ensure we send the exact same payload that we sign
+            clean_params: Dict[str, Any] | None = None
+            clean_data: Dict[str, Any] | None = None
             payload_for_sign = ""
             if auth:
                 if method.upper() in {"GET", "DELETE"}:
-                    payload_for_sign = self._canonical_query(params)
+                    # Exclude None values from query params for both signing and sending
+                    if params:
+                        clean_params = {k: v for k, v in params.items() if v is not None}
+                    else:
+                        clean_params = None
+                    payload_for_sign = self._canonical_query(clean_params)
                 else:
-                    payload_for_sign = self._minified_json(data)
+                    # Exclude None values from body for both signing and sending
+                    if data:
+                        clean_data = {k: v for k, v in data.items() if v is not None}
+                    else:
+                        clean_data = None
+                    payload_for_sign = self._minified_json(clean_data)
                 headers.update(
                     {
                         "X-BAPI-API-KEY": self.api_key,
@@ -128,7 +141,14 @@ class BybitV5Client:
                 )
 
             try:
-                resp = self._client.request(method, url, params=params, json=data, headers=headers)
+                # Use cleaned payloads when auth is required to avoid sign mismatches
+                resp = self._client.request(
+                    method,
+                    url,
+                    params=(clean_params if auth else params),
+                    json=(clean_data if auth else data),
+                    headers=headers,
+                )
             except httpx.RequestError:
                 if attempt >= max_retries:
                     raise

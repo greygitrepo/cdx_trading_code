@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from .backtest import Engine
-from .fees import SimpleFeeModel, SimpleSlippage
-from .types import Account, Order, OrderType, Side, Tick
+from ..backtest import Engine
+from ..fees import SimpleFeeModel, SimpleSlippage
+from ..types import Account, Order, OrderType, Side, Tick
 
 
 def simulate_trade() -> str:

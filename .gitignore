@@ -2,3 +2,19 @@
 # dev temp
 patch.diff
 patches.zip
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+
+# Local env and logs
+.env
+logs/
+*.log
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
