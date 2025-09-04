@@ -21,7 +21,9 @@ from typing import Optional
 
 def _env_float(name: str, default: float) -> float:
     try:
-        return float(os.environ.get(name, str(default)))
+        raw = os.environ.get(name, str(default))
+        val = raw.split("#", 1)[0].strip()
+        return float(val) if val != "" else float(default)
     except Exception:
         return default
 
@@ -71,4 +73,3 @@ def compute_tp_sl(entry_price: float, side: str, *, tp_pct: float, sl_pct: float
         tp = entry_price * (1 - tp_pct)
         sl = entry_price * (1 + sl_pct)
     return tp, sl
-

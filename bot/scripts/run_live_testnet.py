@@ -86,12 +86,35 @@ def main() -> None:
     client = BybitV5Client()
     symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
     category = os.environ.get("BYBIT_CATEGORY", "linear")
-    leverage = float(os.environ.get("LEVERAGE", os.environ.get("LEVERAGE_DEFAULT", "10")))
-    enable_ws = os.environ.get("ENABLE_PRIVATE_WS", "false").lower() == "true"
+    # Helpers to parse envs with inline comments (e.g., "7   # note")
+    def _env_clean(name: str, default: str | float | int) -> str:
+        raw = os.environ.get(name, str(default))
+        return raw.split("#", 1)[0].strip()
+
+    def _env_float(name: str, default: float) -> float:
+        try:
+            val = _env_clean(name, default)
+            return float(val) if val != "" else float(default)
+        except Exception:
+            return float(default)
+
+    def _env_int(name: str, default: int) -> int:
+        try:
+            val = _env_clean(name, default)
+            return int(val) if val != "" else int(default)
+        except Exception:
+            return int(default)
+
+    def _env_bool(name: str, default: bool) -> bool:
+        val = _env_clean(name, "true" if default else "false").lower()
+        return val == "true"
+
+    leverage = _env_float("LEVERAGE", _env_float("LEVERAGE_DEFAULT", 10.0))
+    enable_ws = _env_bool("ENABLE_PRIVATE_WS", False)
     # Regime/signal thresholds
-    spread_threshold = float(os.environ.get("MIS_SPREAD_THRESHOLD", "0.0004"))
-    spread_pause_mult = float(os.environ.get("SPREAD_PAUSE_MULT", "3.0"))
-    min_depth_usd = float(os.environ.get("MIN_DEPTH_USD", "15000"))
+    spread_threshold = _env_float("MIS_SPREAD_THRESHOLD", 0.0004)
+    spread_pause_mult = _env_float("SPREAD_PAUSE_MULT", 3.0)
+    min_depth_usd = _env_float("MIN_DEPTH_USD", 15000.0)
 
     # 1) API key validation
     try:
@@ -136,10 +159,10 @@ def main() -> None:
             logger.warning(f"Private WS failed to start: {e}")
 
     # Rotation loop config
-    loop_interval = float(os.environ.get("NO_TRADE_SLEEP_SEC", os.environ.get("LOOP_INTERVAL_SEC", "5")))
-    consensus_ticks = int(os.environ.get("CONSENSUS_TICKS", "3"))
-    loop_idle = float(os.environ.get("LOOP_IDLE_SEC", "1"))
-    fixed_notional = float(os.environ.get("ORDER_SIZE_USDT", "0") or 0)
+    loop_interval = _env_float("NO_TRADE_SLEEP_SEC", _env_float("LOOP_INTERVAL_SEC", 5.0))
+    consensus_ticks = _env_int("CONSENSUS_TICKS", 3)
+    loop_idle = _env_float("LOOP_IDLE_SEC", 1.0)
+    fixed_notional = _env_float("ORDER_SIZE_USDT", 0.0)
     exit_flag = ExitFlag()
     idx = 0
 
@@ -225,7 +248,7 @@ def main() -> None:
         prefer_limit = spread <= 0.0005
         # Avoid taker near funding if configured and nextFundingTime is close
         try:
-            avoid_min = float(os.environ.get("AVOID_TAKER_WITHIN_MIN", "5"))
+            avoid_min = _env_float("AVOID_TAKER_WITHIN_MIN", 5.0)
             if not prefer_limit and avoid_min > 0:
                 tk = client.get_tickers(category=category, symbol=symbol)
                 nxt = tk.get("result", {}).get("list", [{}])[0].get("nextFundingTime")
@@ -318,9 +341,9 @@ def main() -> None:
                 side_long = (p.get("side") == "Buy")
                 avg_price = float(p.get("avgPrice") or 0)
                 # Simple trailing: if price moved favorably by trail_after_tp1, set trailingStop
-                trail_after = float(os.environ.get("TRAIL_AFTER_TP1_PCT", "0.0008"))
-                tp_pct = float(os.environ.get("TP_PCT", "0.0010"))
-                sl_pct = float(os.environ.get("SL_PCT", "0.0020"))
+                trail_after = _env_float("TRAIL_AFTER_TP1_PCT", 0.0008)
+                tp_pct = _env_float("TP_PCT", 0.0010)
+                sl_pct = _env_float("SL_PCT", 0.0020)
                 if size > 0 and avg_price > 0:
                     move = (mid - avg_price) / avg_price if side_long else (avg_price - mid) / avg_price
                     if move >= trail_after:
@@ -337,7 +360,7 @@ def main() -> None:
                         except BybitAPIError as e:
                             logger.warning(f"Trailing stop set failed: {e}")
                 # Time stop: close if holding longer than threshold
-                time_stop_sec = int(os.environ.get("TIME_STOP_SEC", "1200"))
+                time_stop_sec = _env_int("TIME_STOP_SEC", 1200)
                 et = p.get("updatedTime") or p.get("createdTime")  # ms
                 if size > 0 and et is not None:
                     held_sec = max(0, int((int(time.time() * 1000) - int(et)) / 1000))

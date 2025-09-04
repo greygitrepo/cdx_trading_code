@@ -15,14 +15,19 @@ def _env_str(name: str, default: str) -> str:
 
 def _env_int(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, str(default)))
+        raw = os.environ.get(name, str(default))
+        # Strip inline comments like "5   # note"
+        val = raw.split("#", 1)[0].strip()
+        return int(val) if val != "" else int(default)
     except Exception:
         return default
 
 
 def _env_float(name: str, default: float) -> float:
     try:
-        return float(os.environ.get(name, str(default)))
+        raw = os.environ.get(name, str(default))
+        val = raw.split("#", 1)[0].strip()
+        return float(val) if val != "" else float(default)
     except Exception:
         return default
 
@@ -31,7 +36,10 @@ def _env_bool(name: str, default: bool) -> bool:
     v = os.environ.get(name)
     if v is None:
         return default
-    return v.lower() == "true"
+    val = v.split("#", 1)[0].strip().lower()
+    if val == "":
+        return default
+    return val == "true"
 
 
 @dataclass

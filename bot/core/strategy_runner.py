@@ -17,7 +17,9 @@ from .execution.risk_rules import compute_tp_sl
 
 def _env_float(name: str, default: float) -> float:
     try:
-        return float(os.environ.get(name, str(default)))
+        raw = os.environ.get(name, str(default))
+        val = raw.split("#", 1)[0].strip()
+        return float(val) if val != "" else float(default)
     except Exception:
         return default
 
