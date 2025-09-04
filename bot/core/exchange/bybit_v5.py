@@ -108,7 +108,12 @@ class BybitV5Client:
         max_retries: int = 3,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        headers: Dict[str, str] = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # Some Bybit edges return non-JSON without UA; set a stable UA
+            "User-Agent": "cdx-trading-bot/1.0 (+httpx)",
+        }
         ts_ms = int(time.time() * 1000)
         attempt = 0
         while True:
@@ -137,6 +142,8 @@ class BybitV5Client:
                         "X-BAPI-TIMESTAMP": str(ts_ms),
                         "X-BAPI-RECV-WINDOW": str(self.recv_window_ms),
                         "X-BAPI-SIGN": self._sign(ts_ms, payload_for_sign),
+                        # v5 signing type: 2 = HMAC-SHA256
+                        "X-BAPI-SIGN-TYPE": "2",
                     }
                 )
 

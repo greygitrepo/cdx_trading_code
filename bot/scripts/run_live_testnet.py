@@ -162,11 +162,17 @@ def main() -> None:
 
     # 1) API key validation
     try:
-        wb = client.get_wallet_balance()
+        account_type = os.environ.get("ACCOUNT_TYPE", "UNIFIED").upper()
+        logger.info(f"Bybit base={client.base_url} category={category} accountType={account_type}")
+        wb = client.get_wallet_balance(accountType=account_type)
         logger.info("Wallet balance call OK: retCode=0")
         slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="wallet_balance", payload=wb.get("result", {}))
     except BybitAPIError as e:
         logger.error(f"Wallet balance failed: {e}")
+        if getattr(e, "ret_code", 0) in (401, 403):
+            logger.error(
+                "Auth failed (401/403). Check: TESTNET key pair, ACCOUNT_TYPE (UNIFIED vs CONTRACT), IP whitelist, and system time."
+            )
         sys.exit(2)
 
     # Extract equity and free balance (best effort)
