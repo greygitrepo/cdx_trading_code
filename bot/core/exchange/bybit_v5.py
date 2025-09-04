@@ -189,6 +189,10 @@ class BybitV5Client:
         }
         return self._request("GET", "/v5/market/orderbook", params=params, auth=False)
 
+    def get_tickers(self, category: Optional[str] = None, symbol: Optional[str] = None) -> Dict[str, Any]:
+        params = {"category": category or self.default_category, "symbol": symbol}
+        return self._request("GET", "/v5/market/tickers", params=params, auth=False)
+
     # -------- Private trading/account endpoints --------
     def place_order(
         self,
@@ -277,6 +281,48 @@ class BybitV5Client:
             "sellLeverage": str(sellLeverage),
         }
         return self._request("POST", "/v5/position/set-leverage", data=payload, auth=True)
+
+    def set_trading_stop(
+        self,
+        *,
+        symbol: str,
+        takeProfit: Optional[str | float] = None,
+        stopLoss: Optional[str | float] = None,
+        trailingStop: Optional[str | float] = None,
+        tpTriggerBy: Optional[str] = None,
+        slTriggerBy: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "category": category or self.default_category,
+            "symbol": symbol,
+            "takeProfit": str(takeProfit) if takeProfit is not None else None,
+            "stopLoss": str(stopLoss) if stopLoss is not None else None,
+            "trailingStop": str(trailingStop) if trailingStop is not None else None,
+            "tpTriggerBy": tpTriggerBy,
+            "slTriggerBy": slTriggerBy,
+        }
+        return self._request("POST", "/v5/position/trading-stop", data=payload, auth=True)
+
+    def close_position_market(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: str | float,
+        category: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Close position with a market reduce-only order."""
+        payload = {
+            "category": category or self.default_category,
+            "symbol": symbol,
+            "side": side,
+            "orderType": "Market",
+            "qty": str(qty),
+            "reduceOnly": True,
+            "timeInForce": "IOC",
+        }
+        return self._request("POST", "/v5/order/create", data=payload, auth=True)
 
     # -------- Instrument utilities --------
     @staticmethod

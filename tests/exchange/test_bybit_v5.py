@@ -126,3 +126,39 @@ def test_set_leverage_payload(monkeypatch):
     assert sent["data"]["symbol"] == "BTCUSDT"
     assert sent["data"]["buyLeverage"] == "10"
     assert sent["data"]["sellLeverage"] == "10"
+
+
+def test_set_trading_stop_payload(monkeypatch):
+    client = BybitV5Client(api_key="k", api_secret="s", testnet=True)
+    sent = {}
+
+    def _fake_request(method, path, params=None, data=None, auth=False, max_retries=3):
+        sent.update({"method": method, "path": path, "data": data, "auth": auth})
+        return {"retCode": 0, "retMsg": "OK", "result": {}}
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+    client.set_trading_stop(symbol="BTCUSDT", takeProfit=30050, stopLoss=29950, trailingStop=30, category="linear")
+    assert sent["method"] == "POST"
+    assert sent["path"] == "/v5/position/trading-stop"
+    assert sent["auth"] is True
+    assert sent["data"]["symbol"] == "BTCUSDT"
+    assert sent["data"]["takeProfit"] == "30050"
+    assert sent["data"]["stopLoss"] == "29950"
+    assert sent["data"]["trailingStop"] == "30"
+
+
+def test_close_position_market_payload(monkeypatch):
+    client = BybitV5Client(api_key="k", api_secret="s", testnet=True)
+    sent = {}
+
+    def _fake_request(method, path, params=None, data=None, auth=False, max_retries=3):
+        sent.update({"method": method, "path": path, "data": data, "auth": auth})
+        return {"retCode": 0, "retMsg": "OK", "result": {}}
+
+    monkeypatch.setattr(client, "_request", _fake_request)
+    client.close_position_market(symbol="BTCUSDT", side="SELL", qty="0.01", category="linear")
+    assert sent["method"] == "POST"
+    assert sent["path"] == "/v5/order/create"
+    assert sent["auth"] is True
+    assert sent["data"]["reduceOnly"] is True
+    assert sent["data"]["orderType"] == "Market"

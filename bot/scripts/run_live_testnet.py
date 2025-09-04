@@ -32,6 +32,10 @@ if str(_ROOT) not in sys.path:
 from bot.core.exchange.bybit_v5 import BybitV5Client, BybitAPIError  # noqa: E402
 from bot.core.execution.risk_rules import RiskContext, check_balance_guard, check_order_size, slippage_guard  # noqa: E402
 from bot.core.strategy_runner import build_order_plan  # noqa: E402
+try:
+    from bot.core.exchange.bybit_ws import BybitPrivateWS  # type: ignore # noqa: E402
+except Exception:  # noqa: BLE001
+    BybitPrivateWS = None  # type: ignore
 
 
 def setup_loggers() -> tuple[logging.Logger, _P]:
@@ -80,6 +84,7 @@ def main() -> None:
     symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
     category = os.environ.get("BYBIT_CATEGORY", "linear")
     leverage = float(os.environ.get("LEVERAGE", "10"))
+    enable_ws = os.environ.get("ENABLE_PRIVATE_WS", "false").lower() == "true"
 
     # 1) API key validation
     try:
@@ -120,6 +125,22 @@ def main() -> None:
     except BybitAPIError as e:
         logger.warning(f"Set leverage failed: {e}")
 
+    # Optional: start private WS for live event logging
+    ws = None
+    if enable_ws and BybitPrivateWS is not None:
+        def _on_ws_msg(msg: dict[str, Any]) -> None:
+            write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "ws", "data": msg})
+
+        def _on_ws_err(err: Exception) -> None:
+            logger.warning(f"WS error: {err}")
+
+        try:
+            ws = BybitPrivateWS(on_message=_on_ws_msg, on_error=_on_ws_err)
+            ws.start()
+            logger.info("Private WS started (order/execution/position)")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Private WS failed to start: {e}")
+
     # 2) Timed loop: signal -> order -> reflect -> cancel (smoke)
     loop_interval = float(os.environ.get("LOOP_INTERVAL_SEC", "5"))
     max_iters = int(os.environ.get("MAX_ITERS", "3"))
@@ -159,6 +180,21 @@ def main() -> None:
             continue
 
         prefer_limit = spread <= 0.0005
+        # Avoid taker near funding if configured and nextFundingTime is close
+        try:
+            avoid_min = float(os.environ.get("AVOID_TAKER_WITHIN_MIN", "5"))
+            if not prefer_limit and avoid_min > 0:
+                tk = client.get_tickers(category=category, symbol=symbol)
+                nxt = tk.get("result", {}).get("list", [{}])[0].get("nextFundingTime")
+                if nxt:
+                    now_ms = int(time.time() * 1000)
+                    rem_min = max(0.0, (float(nxt) - now_ms) / 60000.0)
+                    if rem_min <= avoid_min:
+                        logger.info(f"Within {avoid_min}m of funding; skip taker")
+                        time.sleep(loop_interval)
+                        continue
+        except Exception:
+            pass
         plan = build_order_plan(
             signal=signal,
             last_price=mid,
@@ -228,6 +264,45 @@ def main() -> None:
         try:
             pos = client.get_positions(category=category, symbol=symbol)
             write_event(logs_dir, {"ts": int(time.time() * 1000), "type": "positions", "data": pos})
+            # Time stop and trailing if position present
+            plist = pos.get("result", {}).get("list", [])
+            if plist:
+                p = plist[0]
+                size = abs(float(p.get("size") or 0))
+                side_long = (p.get("side") == "Buy")
+                avg_price = float(p.get("avgPrice") or 0)
+                # Simple trailing: if price moved favorably by trail_after_tp1, set trailingStop
+                trail_after = float(os.environ.get("TRAIL_AFTER_TP1_PCT", "0.0008"))
+                tp_pct = float(os.environ.get("TP_PCT", "0.0010"))
+                sl_pct = float(os.environ.get("SL_PCT", "0.0020"))
+                if size > 0 and avg_price > 0:
+                    move = (mid - avg_price) / avg_price if side_long else (avg_price - mid) / avg_price
+                    if move >= trail_after:
+                        try:
+                            trailing_abs = round(avg_price * sl_pct, 4)
+                            client.set_trading_stop(
+                                symbol=symbol,
+                                trailingStop=trailing_abs,
+                                takeProfit=avg_price * (1 + tp_pct if side_long else 1 - tp_pct),
+                                stopLoss=avg_price * (1 - sl_pct if side_long else 1 + sl_pct),
+                                category=category,
+                            )
+                            logger.info("Applied trailing stop via trading-stop API")
+                        except BybitAPIError as e:
+                            logger.warning(f"Trailing stop set failed: {e}")
+                # Time stop: close if holding longer than threshold
+                time_stop_sec = int(os.environ.get("TIME_STOP_SEC", "1200"))
+                et = p.get("updatedTime") or p.get("createdTime")  # ms
+                if size > 0 and et is not None:
+                    held_sec = max(0, int((int(time.time() * 1000) - int(et)) / 1000))
+                    if held_sec >= time_stop_sec:
+                        try:
+                            qty = size
+                            side = "SELL" if side_long else "BUY"
+                            client.close_position_market(symbol=symbol, side=side, qty=str(qty), category=category)
+                            logger.info(f"Time stop triggered after {held_sec}s; closing position")
+                        except BybitAPIError as e:
+                            logger.warning(f"Time stop close failed: {e}")
         except BybitAPIError as e:
             logger.warning(f"Positions fetch failed: {e}")
 
@@ -240,7 +315,15 @@ def main() -> None:
             logger.error(f"Cancel failed: {e}")
 
         time.sleep(loop_interval)
-
+    
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # Best-effort WS shutdown if enabled
+        try:
+            if 'ws' in locals() and ws is not None:
+                ws.stop()
+        except Exception:
+            pass
