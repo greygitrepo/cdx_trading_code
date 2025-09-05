@@ -4,3 +4,4 @@ pydantic
 pyyaml
 httpx
 pytest-timeout
+websocket-client

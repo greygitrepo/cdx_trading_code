@@ -50,9 +50,24 @@ class RuntimeConfig:
 def load_runtime(
     app_path: Path = Path("bot/configs/config.yaml"), params_path: Optional[Path] = None
 ) -> RuntimeConfig:
+    """Load runtime configuration with robust params fallback.
+
+    Priority:
+    1) Explicit `params_path` argument
+    2) `PARAMS_YAML` env var
+    3) If YAML file exists → load; else use `app.params` embedded in app config
+    """
     app = load_app_config(app_path)
+    # Allow env override
     if params_path is None:
-        params_path = Path("bot/configs/params_gumiho.yaml")
-    params = load_params(params_path)
+        env_p = os.getenv("PARAMS_YAML")
+        if env_p:
+            params_path = Path(env_p)
+    params: ParamsPack
+    if params_path is not None and Path(params_path).exists():
+        params = load_params(Path(params_path))
+    else:
+        # Fallback to embedded params in app config
+        params = app.params
     modes = get_modes()
     return RuntimeConfig(app=app, params=params, modes=modes)

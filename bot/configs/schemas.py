@@ -78,6 +78,20 @@ class OrderBookParams(BaseModel):
     min_depth_usd: int = 15000
 
 
+class OBFlowParams(BaseModel):
+    """Thresholds for OB-Flow pattern signals (A/B/C/D).
+
+    Keep defaults conservative; profiles may override in YAML.
+    """
+
+    depth_imb_L5_min: float = 0.18
+    spread_tight_mult_mid: float = 0.0008
+    tps_min_breakout: float = 8.0
+    c_absorption_min: float = 0.35
+    d_wide_spread_mult_mid: float = 0.0015
+    d_micro_dev_mult_spread: float = 0.40
+
+
 class EntryExitParams(BaseModel):
     tp1: float = 0.0010
     trail_after_tp1: float = 0.0008
@@ -104,6 +118,7 @@ class ParamsPack(BaseModel):
     regime: RegimeParams = RegimeParams()
     indicators: IndicatorParams = IndicatorParams()
     orderbook: OrderBookParams = OrderBookParams()
+    obflow: OBFlowParams = OBFlowParams()
     entry_exit: EntryExitParams = EntryExitParams()
     funding_time: FundingTimeParams = FundingTimeParams()
 
@@ -116,6 +131,24 @@ class AppConfig(BaseModel):
     exchange: ExchangeConfig = ExchangeConfig()
     risk: RiskConfig = RiskConfig()
     params: ParamsPack = ParamsPack()
+    runtime: "RuntimeOptions" = Field(default_factory=lambda: RuntimeOptions())
+
+
+class RuntimeOptions(BaseModel):
+    """Runtime toggles that are not strategy params.
+
+    Exposed in `config.yaml` under `runtime`. Currently supports strategy selection.
+    """
+
+    strategy: Literal["pack", "obflow"] = Field(
+        "pack", description="Select execution strategy: pack (MIS/VRS/LSR) or obflow"
+    )
+
+
+try:
+    AppConfig.model_rebuild()  # type: ignore[attr-defined]
+except Exception:
+    pass
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -124,7 +157,15 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 def load_app_config(path: Path) -> AppConfig:
     obj = load_yaml(path)
-    return AppConfig(**obj)
+    # Backward compatible: allow missing `runtime` section
+    app = AppConfig(**obj)
+    runtime_obj = obj.get("runtime") if isinstance(obj, dict) else None
+    try:
+        rt = RuntimeOptions(**(runtime_obj or {}))
+    except Exception:
+        rt = RuntimeOptions()
+    setattr(app, "runtime", rt)
+    return app
 
 
 def load_params(path: Path) -> ParamsPack:

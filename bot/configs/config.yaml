@@ -49,6 +49,15 @@ params:
     obi_threshold_mis: 0.60
     min_depth_usd: 50000           # 15000 → 50000
 
+  # OB-Flow signal thresholds (A/B/C/D)
+  obflow:
+    depth_imb_L5_min: 0.18
+    spread_tight_mult_mid: 0.0008
+    tps_min_breakout: 8.0
+    c_absorption_min: 0.35
+    d_wide_spread_mult_mid: 0.0015
+    d_micro_dev_mult_spread: 0.40
+
   entry_exit:
     tp1: 0.0012                     # 0.10% → 0.12%
     trail_after_tp1: 0.0008
@@ -60,3 +69,6 @@ params:
   funding_time:
     avoid_taker_within_min: 5
 
+# Runtime toggles (runner)
+runtime:
+  strategy: pack   # pack=MIS/VRS/LSR, obflow=OB-Flow

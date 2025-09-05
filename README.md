@@ -90,9 +90,22 @@ Env highlights
 
 ## Configuration
 - Default app config: `bot/configs/config.yaml`
-- Parameter pack: `bot/configs/params_gumiho.yaml`
-You can load/validate them via `bot.configs.schemas.load_app_config` and `load_params`.
+- Parameter pack is under `params` in `config.yaml`. OB-Flow thresholds live under `params.obflow`.
+You can load/validate via `bot.configs.schemas.load_app_config` and access `app.params`.
 - Universe/Rotation: `SYMBOL_UNIVERSE`, `DISCOVER_SYMBOLS`, `UNIVERSE_TOP_N`, `CONSENSUS_TICKS`, `NO_TRADE_SLEEP_SEC`, `LOOP_IDLE_SEC`, `EXIT_KEY`, `ORDER_SIZE_USDT`
+
+### OB-Flow thresholds (YAML)
+`bot/core/signals/obflow.py` reads thresholds from YAML via `OBFlowConfig.from_params(app.params)`.
+Tune under `bot/configs/config.yaml` → `params.obflow`:
+- depth_imb_L5_min: imbalance threshold for Pattern A/C
+- spread_tight_mult_mid: tight-spread multiplier for Pattern B
+- tps_min_breakout: min ticks-per-second for breakout (placeholder)
+- c_absorption_min: absorption strength threshold
+- d_wide_spread_mult_mid: wide spread gate for Pattern D
+- d_micro_dev_mult_spread: micro deviation vs spread for Pattern D
+
+### Trade state helpers
+`bot/core/execution/trade_state.py` provides partial TP, trailing after TP1, time-stop, and cooldown management for live/sim.
 
 ### Quick-Test Profile (fast testnet fills)
 
@@ -119,3 +132,10 @@ python bot/scripts/make_report.py --run_id <run_id>
 The HTML report is saved to `reports/quick_test_<run_id>.html` with fill rate, slippage estimate, and basic summaries.
 
 Note: Before real trading, revert to conservative settings or omit `--profile quick-test`.
+
+## Replay/Backtest (Stub LOB)
+- OB-Flow 리플레이: `bot/scripts/run_replay_obflow.py`는 `data/stubs/ws/orderbook1_<SYMBOL>.jsonl`을 재생해 신호/부분청산/트레일/타임스탑/쿨다운 동작을 점검합니다.
+```
+python bot/scripts/run_replay_obflow.py --symbol BTCUSDT --max-sec 60 --qty-usdt 50
+```
+결과는 `logs/replay_obflow/<SYMBOL>.jsonl` 이벤트와 `reports/replay_obflow_<SYMBOL>.json` 요약으로 저장됩니다.

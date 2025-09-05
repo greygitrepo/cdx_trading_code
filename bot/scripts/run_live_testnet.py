@@ -43,6 +43,8 @@ try:
         select_strategy,
     )
     from bot.core.indicators import Rolling
+    from bot.core.signals.obflow import decide as obflow_decide, OBFlowConfig
+    from bot.core.config import load_runtime
     from bot.core.rotation import build_universe, ExitFlag
     from bot.utils.structlog import StructLogger, init_run_dir
 except Exception:  # pragma: no cover - fallback for direct script runs
@@ -65,6 +67,8 @@ except Exception:  # pragma: no cover - fallback for direct script runs
         select_strategy,
     )
     from bot.core.indicators import Rolling
+    from bot.core.signals.obflow import decide as obflow_decide, OBFlowConfig
+    from bot.core.config import load_runtime
     from bot.core.rotation import build_universe, ExitFlag
     from bot.utils.structlog import StructLogger, init_run_dir
 
@@ -196,6 +200,8 @@ def _apply_profile_env(profile: str) -> None:
     # For SL, prefer existing SL_PCT env if set
     if "sl" in ex:
         os.environ.setdefault("SL_PCT", str(ex["sl"]))
+    if "trail_after_tp1" in ex:
+        os.environ.setdefault("TRAIL_AFTER_TP1_PCT", str(ex["trail_after_tp1"]))
 
     # Runtime
     rt = cfg.get("runtime", {}) or {}
@@ -204,6 +210,17 @@ def _apply_profile_env(profile: str) -> None:
     if "symbol_universe" in rt:
         os.environ.setdefault("SYMBOL_UNIVERSE", ",".join(rt["symbol_universe"]))
         os.environ.setdefault("DISCOVER_SYMBOLS", "false")
+    if "poll_ms" in rt:
+        os.environ.setdefault("POLL_MS", str(rt["poll_ms"]))
+
+    # Risk overlays
+    rk = cfg.get("risk", {}) or {}
+    if "max_alloc_pct" in rk:
+        os.environ.setdefault("MAX_ALLOC_PCT", str(rk["max_alloc_pct"]))
+    if "min_free_balance_usdt" in rk:
+        os.environ.setdefault("MIN_FREE_BALANCE_USDT", str(rk["min_free_balance_usdt"]))
+    if "slippage_guard_pct" in rk:
+        os.environ.setdefault("SLIPPAGE_GUARD_PCT", str(rk["slippage_guard_pct"]))
 
 
 def main() -> None:
@@ -213,6 +230,12 @@ def main() -> None:
         "--profile",
         default=os.environ.get("PROFILE", ""),
         help="profile name (e.g., quick-test)",
+    )
+    parser.add_argument(
+        "--strategy",
+        default=os.environ.get("STRATEGY", "pack"),
+        choices=["pack", "obflow"],
+        help="pack=기존 MIS/VRS/LSR, obflow=OB-Flow 신호 사용",
     )
     args = parser.parse_args()
 
@@ -246,6 +269,19 @@ def main() -> None:
     client = BybitV5Client()
     symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
     category = os.environ.get("BYBIT_CATEGORY", "linear")
+    # Load YAML once for OB-Flow thresholds
+    runtime = load_runtime()
+    ob_cfg = OBFlowConfig.from_params(runtime.params)
+    # Strategy selection precedence: CLI > ENV > config
+    strategy = (args.strategy or "").strip().lower()
+    if not strategy:
+        strategy = os.environ.get("STRATEGY", "").strip().lower()
+    if not strategy:
+        try:
+            strategy = str(getattr(runtime.app.runtime, "strategy", "pack")).lower()
+        except Exception:
+            strategy = "pack"
+    os.environ["STRATEGY"] = strategy
 
     # Helpers to parse envs with inline comments (e.g., "7   # note")
     def _env_clean(name: str, default: str | float | int) -> str:
@@ -270,8 +306,38 @@ def main() -> None:
         val = _env_clean(name, "true" if default else "false").lower()
         return val == "true"
 
+    def _fee_amount(notional: float, bps: float) -> float:
+        try:
+            return abs(float(notional)) * max(0.0, float(bps)) / 1e4
+        except Exception:
+            return 0.0
+
+    def _fee_aware_targets(
+        entry_price: float,
+        *,
+        side_long: bool,
+        tp_net: float,
+        sl_net: float,
+        entry_fee_bps: float,
+        exit_fee_bps: float,
+    ) -> tuple[float, float]:
+        fe = max(0.0, float(entry_fee_bps)) / 1e4
+        fx = max(0.0, float(exit_fee_bps)) / 1e4
+        fee_sum = fe + fx
+        tp_gross = max(0.0, tp_net + fee_sum)
+        sl_gross = max(0.0, sl_net - fee_sum)
+        if side_long:
+            return entry_price * (1 + tp_gross), entry_price * (1 - sl_gross)
+        else:
+            return entry_price * (1 - tp_gross), entry_price * (1 + sl_gross)
+
     leverage = _env_float("LEVERAGE", _env_float("LEVERAGE_DEFAULT", 10.0))
     enable_ws = _env_bool("ENABLE_PRIVATE_WS", False)
+    # Fee rates (bps); will try API first, then fallback to env/defaults
+    maker_fee_bps = 2.0
+    taker_fee_bps = 5.5
+    fee_assume_entry = os.environ.get("FEE_ASSUME_ENTRY", "auto").lower()  # auto|maker|taker
+    fee_assume_exit = os.environ.get("FEE_ASSUME_EXIT", "taker").lower()   # maker|taker
     # Regime/signal thresholds
     spread_threshold = _env_float("MIS_SPREAD_THRESHOLD", 0.0004)
     spread_pause_mult = _env_float("SPREAD_PAUSE_MULT", 3.0)
@@ -283,7 +349,7 @@ def main() -> None:
         logger.info(
             f"Bybit base={client.base_url} category={category} accountType={account_type}"
         )
-        wb = client.get_wallet_balance(accountType=account_type)
+        wb = client.get_wallet_balance(accountType=account_type, coin="USDT")
         logger.info("Wallet balance call OK: retCode=0")
         slog.log_info(
             ts=int(time.time() * 1000),
@@ -299,7 +365,7 @@ def main() -> None:
                 logger.warning(
                     f"Wallet balance auth failed with {account_type}; retrying with {alt}"
                 )
-                wb = client.get_wallet_balance(accountType=alt)
+                wb = client.get_wallet_balance(accountType=alt, coin="USDT")
                 logger.info("Wallet balance call OK on fallback: retCode=0")
                 slog.log_info(
                     ts=int(time.time() * 1000),
@@ -322,23 +388,62 @@ def main() -> None:
     free = 0.0
     try:
         acct = wb.get("result", {}).get("list", [{}])[0]
-        total_equity = (
-            float(acct.get("totalEquity", 0)) if "totalEquity" in acct else 0.0
-        )
+        total_equity = float(acct.get("totalEquity") or 0)
         equity = total_equity
-        # Free simplified: availableToWithdraw if present
+        # Free balance fallbacks across account types/edges
         free = float(
-            acct.get("totalAvailableBalance") or acct.get("availableToWithdraw") or 0
+            acct.get("totalAvailableBalance")
+            or acct.get("availableToWithdraw")
+            or acct.get("availableBalance")
+            or acct.get("availableMargin")
+            or 0
         )
     except Exception:
         pass
     logger.info(f"Equity={equity:.2f} USDT, Free={free:.2f} USDT")
 
+    # Try to load account-specific fee rates (maker/taker)
+    try:
+        fr = client.get_fee_rate(category=category, symbol=os.environ.get("BYBIT_SYMBOL", "BTCUSDT"))
+        it = (fr.get("result", {}).get("list", []) or [{}])[0]
+        mk = it.get("makerFeeRate")
+        tk = it.get("takerFeeRate")
+        if mk is not None:
+            maker_fee_bps = max(0.0, float(mk) * 1e4)
+        if tk is not None:
+            taker_fee_bps = max(0.0, float(tk) * 1e4)
+        logger.info(f"Fee rates (bps): maker={maker_fee_bps:.4f}, taker={taker_fee_bps:.4f}")
+        slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="fee_rates", payload={"maker_bps": maker_fee_bps, "taker_bps": taker_fee_bps})
+    except BybitAPIError as e:
+        logger.warning(f"Fee rate fetch failed; using defaults/env: {e}")
+        # Fallback to env if provided
+        maker_fee_bps = _env_float("MAKER_FEE_BPS", maker_fee_bps)
+        taker_fee_bps = _env_float("TAKER_FEE_BPS", taker_fee_bps)
+
     # Build symbol universe
     uni = build_universe(client)
+    # Exclude symbols with open positions from search/rotation
+    try:
+        pos_all = client.get_positions(category=category, settleCoin="USDT")
+        plist = pos_all.get("result", {}).get("list", [])
+        open_syms = {
+            str(p.get("symbol"))
+            for p in plist
+            if p.get("symbol") and abs(float(p.get("size") or 0)) > 0
+        }
+    except Exception:
+        open_syms = set()
+    symbols = [s for s in uni.symbols if s not in open_syms]
+    if not symbols:
+        symbols = uni.symbols  # fallback: do not block rotation entirely
     logger.info(
-        f"Universe: {len(uni.symbols)} symbols ({'discovered' if uni.discovered else 'static'}) -> {uni.symbols}"
+        f"Universe: {len(symbols)} symbols ({'discovered' if uni.discovered else 'static'}) -> {symbols}"
     )
+    if open_syms:
+        logger.info(f"Excluded (open positions): {sorted(list(open_syms))}")
+    # Rebind for rotation loop
+    from bot.core.rotation import Universe as _U
+    uni = _U(symbols=symbols, discovered=uni.discovered)
     slog.log_info(
         ts=int(time.time() * 1000),
         symbol=None,
@@ -415,11 +520,14 @@ def main() -> None:
         closes = Rolling(maxlen=120)
         vols = Rolling(maxlen=120)
         traded = False
+        # Estimated entry info for fee-inclusive realized PnL on partial closes
+        est_entry: dict[str, float | str] | None = None  # keys: side, qty, avg, fee_remain
 
+        ob_depth = _env_int("ORDERBOOK_DEPTH", 1)
         for i in range(consensus_ticks):
             if exit_flag.check():
                 break
-            ob = client.get_orderbook(symbol=symbol, depth=1, category=category)
+            ob = client.get_orderbook(symbol=symbol, depth=ob_depth, category=category)
         slog.log_info(
             ts=int(time.time() * 1000),
             symbol=symbol,
@@ -428,8 +536,10 @@ def main() -> None:
         )
         parse_ok = False
         try:
-            bids = ob["result"]["b"]
-            asks = ob["result"]["a"]
+            bids = ob["result"]["b"] if ob.get("result") and ob["result"].get("b") else []
+            asks = ob["result"]["a"] if ob.get("result") and ob["result"].get("a") else []
+            if not bids or not asks:
+                raise ValueError("empty bids/asks")
             best_bid = float(bids[0][0])
             best_ask = float(asks[0][0])
             bid_sz = float(bids[0][1]) if len(bids[0]) > 1 else 0.0
@@ -441,7 +551,7 @@ def main() -> None:
             )
             parse_ok = True
         except Exception as e:
-            logger.warning(f"Failed to parse orderbook: {e}")
+            logger.info(f"Failed to parse orderbook (fallback to ticker): {e}")
             # Fallback: use ticker for mid/spread estimate
             try:
                 tk = client.get_tickers(category=category, symbol=symbol)
@@ -504,52 +614,74 @@ def main() -> None:
             time.sleep(loop_interval)
             continue
 
-        # 3) Strategy pack scoring (MIS/VRS/LSR) and selection
-        sp = StrategyParams()
-        mis = mis_signal(
-            closes.list(),
-            orderbook_imbalance=(obi + 1) / 2,
-            spread=spread,
-            spread_threshold=spread_threshold,
-            params=sp,
-        )
-        vrs = vrs_signal(closes.list(), vols.list(), sp)
-        # Heuristic for LSR inputs
-        wick_long = False
-        trade_burst = (
-            (bid_sz + ask_sz) > 0
-            and vols.list()
-            and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
-        )
-        oi_drop = False  # not available without OI feed
-        lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
-        strat_name, strat_side = select_strategy(mis, vrs, lsr)
-        if strat_name is None or strat_side is None:
-            logger.info("No strategy consensus; sleeping")
+        # 3) Strategy selection
+        if strategy == "obflow":
+            # OB-Flow는 L2Book 특징이 필요 — mid/spread/마이크로를 기반으로 하므로 여기서 간단히 재계산
+            from bot.core.book import L2Book
+            from bot.core.features import basic_snapshot
+            b = L2Book(symbol=symbol)
+            # L1만 알고 있으므로 현재 bid/ask를 한 레벨로 반영
+            b.bids[mid - spread / 2] = bid_sz or 1.0  # type: ignore[index]
+            b.asks[mid + spread / 2] = ask_sz or 1.0  # type: ignore[index]
+            feat = basic_snapshot(b)
+            sig = obflow_decide(b, ob_cfg)
+            if sig is None:
+                logger.info("OB-Flow: no signal; sleeping")
+                slog.log_signal(
+                    ts=int(time.time() * 1000), symbol=symbol, scores={"obflow": feat}, decision=None
+                )
+                time.sleep(loop_interval)
+                continue
+            signal = +1 if str(sig["side"]).upper() == "BUY" else -1
+            logger.info(f"OB-Flow selected: {sig['type']} -> {sig['side']}")
+            slog.log_signal(
+                ts=int(time.time() * 1000), symbol=symbol, scores={"obflow": feat}, decision=f"OBF:{sig['type']}:{sig['side']}"
+            )
+        else:
+            sp = StrategyParams()
+            mis = mis_signal(
+                closes.list(),
+                orderbook_imbalance=(obi + 1) / 2,
+                spread=spread,
+                spread_threshold=spread_threshold,
+                params=sp,
+            )
+            vrs = vrs_signal(closes.list(), vols.list(), sp)
+            wick_long = False
+            trade_burst = (
+                (bid_sz + ask_sz) > 0
+                and vols.list()
+                and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
+            )
+            oi_drop = False
+            lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
+            strat_name, strat_side = select_strategy(mis, vrs, lsr)
+            if strat_name is None or strat_side is None:
+                logger.info("No strategy consensus; sleeping")
+                slog.log_signal(
+                    ts=int(time.time() * 1000),
+                    symbol=symbol,
+                    scores={"mis": mis, "vrs": vrs, "lsr": lsr},
+                    decision=None,
+                )
+                slog.log_why_no_trade(
+                    ts=int(time.time() * 1000),
+                    symbol=symbol,
+                    reasons=["no_consensus"],
+                    context={"mis": mis, "vrs": vrs, "lsr": lsr},
+                )
+                time.sleep(loop_interval)
+                continue
+            signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
+            logger.info(
+                f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal > 0 else 'SELL')}"
+            )
             slog.log_signal(
                 ts=int(time.time() * 1000),
                 symbol=symbol,
                 scores={"mis": mis, "vrs": vrs, "lsr": lsr},
-                decision=None,
+                decision=f"{strat_name}:{'BUY' if signal > 0 else 'SELL'}",
             )
-            slog.log_why_no_trade(
-                ts=int(time.time() * 1000),
-                symbol=symbol,
-                reasons=["no_consensus"],
-                context={"mis": mis, "vrs": vrs, "lsr": lsr},
-            )
-            time.sleep(loop_interval)
-            continue
-        signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
-        logger.info(
-            f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal > 0 else 'SELL')}"
-        )
-        slog.log_signal(
-            ts=int(time.time() * 1000),
-            symbol=symbol,
-            scores={"mis": mis, "vrs": vrs, "lsr": lsr},
-            decision=f"{strat_name}:{'BUY' if signal > 0 else 'SELL'}",
-        )
 
         prefer_limit = spread <= 0.0005 and _env_bool("PREFER_LIMIT_DEFAULT", True)
         # Avoid taker near funding if configured and nextFundingTime is close
@@ -612,15 +744,17 @@ def main() -> None:
                 context={"stage": "balance_guard"},
             )
             break
-        notional = plan.qty * mid
-        ok, reason = check_order_size(notional, equity)
+        # Compare cap against effective notional (margin usage), not gross exposure
+        notional_gross = plan.qty * mid
+        eff_notional = notional_gross / max(leverage, 1e-9)
+        ok, reason = check_order_size(eff_notional, equity)
         if not ok:
-            logger.warning(f"Risk blocked (size): {reason}")
+            logger.warning(f"Risk blocked (size): {reason} (gross={notional_gross:.2f}, lev={leverage})")
             slog.log_risk(
                 ts=int(time.time() * 1000),
                 symbol=symbol,
                 ok=False,
-                reason=reason,
+                reason=f"{reason}; gross={notional_gross:.2f}; lev={leverage}",
                 context={"stage": "order_size"},
             )
             time.sleep(loop_interval)
@@ -646,6 +780,32 @@ def main() -> None:
 
         # 4) Place order and then cancel for smoke
         try:
+            # In one-way mode, TP/SL attached on create apply at position level.
+            # Opposite-side orders may conflict (e.g., existing Buy position).
+            # Default: do NOT attach TP/SL on create; apply via trading-stop later.
+            attach = _env_bool("ATTACH_TPSL_ON_CREATE", False)
+            # Fee-aware TP/SL on create if requested
+            tp_on_create = None
+            sl_on_create = None
+            if attach and plan.tp is not None and plan.sl is not None:
+                side_long = (plan.side.upper() == "BUY")
+                if fee_assume_entry == "maker":
+                    fe_bps = maker_fee_bps
+                elif fee_assume_entry == "taker":
+                    fe_bps = taker_fee_bps
+                else:
+                    po = prefer_limit and _env_bool("MAKER_POST_ONLY", True)
+                    fe_bps = maker_fee_bps if ((plan.order_type == "Limit") and po) else taker_fee_bps
+                fx_bps = taker_fee_bps if fee_assume_exit != "maker" else maker_fee_bps
+                base_px = float(plan.price if plan.price is not None else mid)
+                tp_on_create, sl_on_create = _fee_aware_targets(
+                    base_px,
+                    side_long=side_long,
+                    tp_net=_env_float("TP_PCT", 0.0010),
+                    sl_net=_env_float("SL_PCT", 0.0020),
+                    entry_fee_bps=fe_bps,
+                    exit_fee_bps=fx_bps,
+                )
             res = client.place_order(
                 symbol=plan.symbol,
                 side=plan.side,
@@ -654,8 +814,8 @@ def main() -> None:
                 timeInForce=plan.tif,
                 price=str(plan.price) if plan.price is not None else None,
                 orderLinkId=plan.order_link_id,
-                takeProfit=str(plan.tp) if plan.tp else None,
-                stopLoss=str(plan.sl) if plan.sl else None,
+                takeProfit=(str(tp_on_create) if attach and tp_on_create else None),
+                stopLoss=(str(sl_on_create) if attach and sl_on_create else None),
             )
             slog.log_order(
                 ts=int(time.time() * 1000),
@@ -674,6 +834,13 @@ def main() -> None:
             )
             logger.info("Order placed")
             traded = True
+            # Estimate entry fee for later PnL calculations
+            po = prefer_limit and _env_bool("MAKER_POST_ONLY", True)
+            is_maker_entry = (plan.order_type == "Limit") and po
+            entry_px = float(plan.price if plan.price is not None else mid)
+            entry_notional = plan.qty * entry_px
+            entry_fee = _fee_amount(entry_notional, maker_fee_bps if is_maker_entry else taker_fee_bps)
+            est_entry = {"side": plan.side, "qty": float(plan.qty), "avg": entry_px, "fee_remain": entry_fee}
         except BybitAPIError as e:
             logger.error(f"Place order failed: {e}")
             time.sleep(loop_interval)
@@ -700,6 +867,51 @@ def main() -> None:
                 size = abs(float(p.get("size") or 0))
                 side_long = p.get("side") == "Buy"
                 avg_price = float(p.get("avgPrice") or 0)
+                # OB-Flow partial TP logic
+                if strategy == "obflow" and size > 0 and avg_price > 0:
+                    try:
+                        tp1 = _env_float("TP_PCT", 0.0012)
+                        partial_pct = _env_float("PARTIAL_CLOSE_PCT", 0.5)
+                        move = (
+                            (mid - avg_price) / avg_price
+                            if side_long
+                            else (avg_price - mid) / avg_price
+                        )
+                        # Place reduce-only partial market close when TP1 reached
+                        if move >= tp1 and partial_pct > 0:
+                            pq = max(0.0, size * min(1.0, partial_pct))
+                            if pq > 0:
+                                try:
+                                    client.place_order(
+                                        symbol=symbol,
+                                        side=("Sell" if side_long else "Buy"),
+                                        qty=str(pq),
+                                        orderType="Market",
+                                        timeInForce="IOC",
+                                        reduceOnly=True,
+                                        category=category,
+                                    )
+                                    logger.info(
+                                        f"OB-Flow partial close executed qty={pq:.6f} at TP1 move={move:.5f}"
+                                    )
+                                    # Fee-inclusive realized PnL estimation (approx)
+                                    gross = ((mid - avg_price) * pq) if side_long else ((avg_price - mid) * pq)
+                                    close_fee = _fee_amount(pq * mid, taker_fee_bps)
+                                    proportional_entry_fee = 0.0
+                                    if est_entry is not None and float(est_entry.get("qty", 0.0)) > 0:
+                                        base_qty = float(est_entry.get("qty", 0.0))
+                                        fee_rem = float(est_entry.get("fee_remain", 0.0))
+                                        if base_qty > 0:
+                                            frac = min(1.0, pq / base_qty)
+                                            proportional_entry_fee = fee_rem * frac
+                                            est_entry["fee_remain"] = max(0.0, fee_rem - proportional_entry_fee)
+                                            est_entry["qty"] = max(0.0, base_qty - pq)
+                                    realized_net = gross - (proportional_entry_fee + close_fee)
+                                    slog.log_pnl(ts=int(time.time() * 1000), symbol=symbol, realized=realized_net, unrealized=None)
+                                except BybitAPIError as e:
+                                    logger.warning(f"Partial close failed: {e}")
+                    except Exception:
+                        pass
                 # Simple trailing: if price moved favorably by trail_after_tp1, set trailingStop
                 trail_after = _env_float("TRAIL_AFTER_TP1_PCT", 0.0008)
                 tp_pct = _env_float("TP_PCT", 0.0010)
@@ -713,13 +925,24 @@ def main() -> None:
                     if move >= trail_after:
                         try:
                             trailing_abs = round(avg_price * sl_pct, 4)
+                            # Fee-aware TP/SL (net targets) mapped to absolute prices
+                            fe_bps = maker_fee_bps if os.environ.get("FEE_ASSUME_ENTRY", "auto").lower() == "maker" else (
+                                taker_fee_bps if os.environ.get("FEE_ASSUME_ENTRY", "auto").lower() == "taker" else taker_fee_bps
+                            )
+                            fx_bps = taker_fee_bps if os.environ.get("FEE_ASSUME_EXIT", "taker").lower() != "maker" else maker_fee_bps
+                            tp_abs, sl_abs = _fee_aware_targets(
+                                avg_price,
+                                side_long=side_long,
+                                tp_net=tp_pct,
+                                sl_net=sl_pct,
+                                entry_fee_bps=fe_bps,
+                                exit_fee_bps=fx_bps,
+                            )
                             client.set_trading_stop(
                                 symbol=symbol,
                                 trailingStop=trailing_abs,
-                                takeProfit=avg_price
-                                * (1 + tp_pct if side_long else 1 - tp_pct),
-                                stopLoss=avg_price
-                                * (1 - sl_pct if side_long else 1 + sl_pct),
+                                takeProfit=tp_abs,
+                                stopLoss=sl_abs,
                                 category=category,
                             )
                             logger.info("Applied trailing stop via trading-stop API")
@@ -754,18 +977,38 @@ def main() -> None:
         except BybitAPIError as e:
             logger.warning(f"Positions fetch failed: {e}")
 
-        # Try to cancel by orderLinkId for smoke
-        try:
-            cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
-            slog.log_cancel(
-                ts=int(time.time() * 1000),
-                symbol=symbol,
-                order_link_id=plan.order_link_id,
-                reason="rotate_or_smoke",
-            )
-            logger.info("Order cancel sent")
-        except BybitAPIError as e:
-            logger.error(f"Cancel failed: {e}")
+        # Try to cancel by orderLinkId for smoke (disable via SKIP_SMOKE_CANCEL=true)
+        if os.environ.get("SKIP_SMOKE_CANCEL", "false").lower() != "true":
+            # Only attempt cancel for resting limits; market/IOC usually gone immediately
+            should_cancel = (plan.order_type == "Limit")
+            if should_cancel:
+                # Cancel only if still open (best-effort check)
+                is_open = True
+                try:
+                    lst = oo.get("result", {}).get("list", []) if "oo" in locals() else []  # type: ignore[name-defined]
+                    if lst:
+                        open_ids = {it.get("orderLinkId") for it in lst}
+                        is_open = plan.order_link_id in open_ids
+                except Exception:
+                    pass
+                if not is_open:
+                    logger.info("Skip cancel: order not open (filled/rejected/already canceled)")
+                else:
+                    try:
+                        cres = client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
+                        slog.log_cancel(
+                            ts=int(time.time() * 1000),
+                            symbol=symbol,
+                            order_link_id=plan.order_link_id,
+                            reason="rotate_or_smoke",
+                        )
+                        logger.info("Order cancel sent")
+                    except BybitAPIError as e:
+                        # 110001: order not exists or too late to cancel — benign in smoke flows
+                        if getattr(e, "ret_code", None) == 110001:
+                            logger.info("Cancel skipped: order already not open (110001)")
+                        else:
+                            logger.error(f"Cancel failed: {e}")
 
         time.sleep(loop_interval)
 

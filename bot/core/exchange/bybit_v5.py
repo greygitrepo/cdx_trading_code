@@ -102,9 +102,9 @@ class BybitV5Client:
     def _canonical_query(params: Dict[str, Any] | None) -> str:
         if not params:
             return ""
-        # Exclude None values; Bybit expects keys sorted by ASCII
+        # Exclude None values; preserve insertion order to match actual sent query
+        # Some Bybit edges verify signature against the exact key order sent.
         items = [(k, v) for k, v in params.items() if v is not None]
-        items.sort(key=lambda kv: kv[0])
         return "&".join(
             f"{k}={kv if isinstance((kv := v), str) else json.dumps(v, separators=(',', ':'))}"
             for k, v in items
@@ -275,6 +275,13 @@ class BybitV5Client:
     ) -> Dict[str, Any]:
         params = {"category": category or self.default_category, "symbol": symbol}
         return self._request("GET", "/v5/market/tickers", params=params, auth=False)
+
+    def get_fee_rate(
+        self, category: Optional[str] = None, symbol: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Fetch account-specific maker/taker fee rates for a symbol/category (requires auth)."""
+        params = {"category": category or self.default_category, "symbol": symbol}
+        return self._request("GET", "/v5/account/fee-rate", params=params, auth=True)
 
     # -------- Private trading/account endpoints --------
     def place_order(
