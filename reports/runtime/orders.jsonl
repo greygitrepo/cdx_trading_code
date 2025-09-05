@@ -12,3 +12,5 @@
 {"ts": 1757036143359, "event": "error", "symbol": "SOLUSDT", "attempt": 2}
 {"ts": 1757036145715, "event": "error", "symbol": "DOGEUSDT", "attempt": 2}
 {"ts": 1757036148377, "event": "error", "symbol": "XRPUSDT", "attempt": 2}
+{"ts": 1757038368106, "event": "error", "symbol": "BTCUSDT", "attempt": 3}
+{"ts": 1757038371075, "event": "error", "symbol": "ETHUSDT", "attempt": 3}
