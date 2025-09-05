@@ -15,9 +15,9 @@ risk:
   daily_max_loss: 0.015            # 2% → 1.5% 데일리 컷
   per_symbol_concentration: 0.30   # 40% → 30%
   # Multi-symbol runtime controls
-  max_symbols: 5
+  max_symbols: 3
   total_budget_usdt: null          # null이면 Env 또는 잔고 사용
-  use_balance_ratio: 1.0
+  use_balance_ratio: 0.9
 
 params:
   universe:
@@ -51,7 +51,7 @@ params:
   orderbook:
     obi_window_ms: 1500
     obi_threshold_mis: 0.60
-    min_depth_usd: 50000           # 15000 → 50000
+    min_depth_usd: 10000           # 15000 → 50000
 
   entry_exit:
     tp1: 0.0012                     # 0.10% → 0.12%

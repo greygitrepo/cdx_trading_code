@@ -1,0 +1,10 @@
+obflow:
+  wall_mult_min: 8
+  depth_imb_L5_min: 0.25
+  tps_min_breakout: 12
+exec:
+  slippage_guard_bps: 3
+risk:
+  tp_pct: 0.0045
+  sl_pct: 0.0035
+  time_stop_sec: 5

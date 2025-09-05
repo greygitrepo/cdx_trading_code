@@ -46,7 +46,14 @@ def test_long_short_chain_on_testnet_integration():
     if getattr(rule, "lot_step", None):
         qty = (int(qty / rule.lot_step)) * rule.lot_step
 
-    oid = ex.place_order(sym, "buy", qty)
+    from bot.core.exchange.bybit_v5 import BybitAPIError
+    try:
+        oid = ex.place_order(sym, "buy", qty)
+    except BybitAPIError as e:
+        # If local creds are invalid/restricted, skip this integration test gracefully
+        if getattr(e, "ret_code", 0) in (10003, 10005):
+            pytest.skip(f"Testnet API key invalid or restricted: {e}")
+        raise
     assert oid is not None
     # Attempt to close position immediately
     ex.close_position(sym)

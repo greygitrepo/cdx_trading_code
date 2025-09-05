@@ -1,6 +1,6 @@
-# cdx_trading_code
+# OB-Flow v2: 호가창+거래량 기반 초단타 봇
 
-Bybit v5 1-minute scalping system scaffold. This repository follows the execution policy defined in `docs/spec.md` and evolves through Phase 1–4 with tests and CI green (no secrets required).
+이 레포는 v2(OB-Flow) 전용 경량 구조를 제공합니다. v1의 다전략 구조(MIS/VRS/LSR 등)를 제거하고, 호가창+거래량 기반 단일 전략만 유지합니다.
 
 ## Project structure
 - `bot/core`: core modules (types, fees/slippage, backtester, etc.)
