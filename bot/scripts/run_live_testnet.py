@@ -306,6 +306,15 @@ def main() -> None:
         val = _env_clean(name, "true" if default else "false").lower()
         return val == "true"
 
+    def _position_mode() -> str:
+        v = os.environ.get("POSITION_MODE", "ONEWAY").strip().upper()
+        return v if v in {"ONEWAY", "HEDGE"} else "ONEWAY"
+
+    def _position_idx_for_side(side: str, mode: str) -> int | None:
+        if mode != "HEDGE":
+            return None
+        return 1 if str(side).upper() == "BUY" else 2
+
     def _fee_amount(notional: float, bps: float) -> float:
         try:
             return abs(float(notional)) * max(0.0, float(bps)) / 1e4
@@ -391,13 +400,7 @@ def main() -> None:
         total_equity = float(acct.get("totalEquity") or 0)
         equity = total_equity
         # Free balance fallbacks across account types/edges
-        free = float(
-            acct.get("totalAvailableBalance")
-            or acct.get("availableToWithdraw")
-            or acct.get("availableBalance")
-            or acct.get("availableMargin")
-            or 0
-        )
+        free = equity
     except Exception:
         pass
     logger.info(f"Equity={equity:.2f} USDT, Free={free:.2f} USDT")
@@ -806,6 +809,8 @@ def main() -> None:
                     entry_fee_bps=fe_bps,
                     exit_fee_bps=fx_bps,
                 )
+            pos_mode = _position_mode()
+            pos_idx = _position_idx_for_side(plan.side, pos_mode)
             res = client.place_order(
                 symbol=plan.symbol,
                 side=plan.side,
@@ -816,6 +821,7 @@ def main() -> None:
                 orderLinkId=plan.order_link_id,
                 takeProfit=(str(tp_on_create) if attach and tp_on_create else None),
                 stopLoss=(str(sl_on_create) if attach and sl_on_create else None),
+                positionIdx=pos_idx,
             )
             slog.log_order(
                 ts=int(time.time() * 1000),
@@ -882,6 +888,7 @@ def main() -> None:
                             pq = max(0.0, size * min(1.0, partial_pct))
                             if pq > 0:
                                 try:
+                                    pos_idx2 = 1 if side_long else 2 if _position_mode() == "HEDGE" else None
                                     client.place_order(
                                         symbol=symbol,
                                         side=("Sell" if side_long else "Buy"),
@@ -890,6 +897,7 @@ def main() -> None:
                                         timeInForce="IOC",
                                         reduceOnly=True,
                                         category=category,
+                                        positionIdx=pos_idx2,
                                     )
                                     logger.info(
                                         f"OB-Flow partial close executed qty={pq:.6f} at TP1 move={move:.5f}"
@@ -944,6 +952,7 @@ def main() -> None:
                                 takeProfit=tp_abs,
                                 stopLoss=sl_abs,
                                 category=category,
+                                positionIdx=(1 if side_long else 2) if _position_mode() == "HEDGE" else None,
                             )
                             logger.info("Applied trailing stop via trading-stop API")
                         except BybitAPIError as e:
@@ -962,6 +971,7 @@ def main() -> None:
                                 side=side,
                                 qty=str(qty),
                                 category=category,
+                                positionIdx=(1 if side_long else 2) if _position_mode() == "HEDGE" else None,
                             )
                             logger.info(
                                 f"Time stop triggered after {held_sec}s; closing position"

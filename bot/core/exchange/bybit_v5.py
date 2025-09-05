@@ -300,6 +300,7 @@ class BybitV5Client:
         stopLoss: Optional[str | float] = None,
         tpTriggerBy: Optional[str] = None,
         slTriggerBy: Optional[str] = None,
+        positionIdx: Optional[int] = None,
     ) -> Dict[str, Any]:
         canon_side = _canon_side(side)
         cat = category or self.default_category or "linear"
@@ -317,6 +318,7 @@ class BybitV5Client:
             "stopLoss": str(stopLoss) if stopLoss is not None else None,
             "tpTriggerBy": tpTriggerBy,
             "slTriggerBy": slTriggerBy,
+            "positionIdx": positionIdx,
         }
         return self._request("POST", "/v5/order/create", data=payload, auth=True)
 
@@ -400,6 +402,7 @@ class BybitV5Client:
         tpTriggerBy: Optional[str] = None,
         slTriggerBy: Optional[str] = None,
         category: Optional[str] = None,
+        positionIdx: Optional[int] = None,
     ) -> Dict[str, Any]:
         payload = {
             "category": category or self.default_category,
@@ -409,6 +412,7 @@ class BybitV5Client:
             "trailingStop": str(trailingStop) if trailingStop is not None else None,
             "tpTriggerBy": tpTriggerBy,
             "slTriggerBy": slTriggerBy,
+            "positionIdx": positionIdx,
         }
         return self._request(
             "POST", "/v5/position/trading-stop", data=payload, auth=True
@@ -421,6 +425,7 @@ class BybitV5Client:
         side: str,
         qty: str | float,
         category: Optional[str] = None,
+        positionIdx: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Close position with a market reduce-only order."""
         canon_side = _canon_side(side)
@@ -432,6 +437,7 @@ class BybitV5Client:
             "qty": str(qty),
             "reduceOnly": True,
             "timeInForce": "IOC",
+            "positionIdx": positionIdx,
         }
         return self._request("POST", "/v5/order/create", data=payload, auth=True)
 
