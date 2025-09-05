@@ -3,15 +3,41 @@ from __future__ import annotations
 import os
 import sys
 import time
-from pathlib import Path
-from bot.core.exchange.bybit_v5 import BybitV5Client, BybitAPIError
-from bot.core.book import L2Book, apply_snapshot, apply_delta
-from bot.core.data_ws import PublicWS
-from bot.core.features import basic_snapshot
-from bot.core.signals.obflow import decide, OBFlowConfig
-from bot.core.exec.broker import Broker, ExecConfig
-from bot.core.exec.risk import compute_tp_sl, RiskConfig
-from bot.core.recorder import Recorder
+from pathlib import Path as _P, Path
+
+# Ensure repo root on sys.path for direct execution
+_ROOT = _P(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+
+def _import_runtime():
+    # Import bot.* modules after sys.path injection to satisfy Ruff E402
+    from bot.core.exchange.bybit_v5 import BybitV5Client, BybitAPIError
+    from bot.core.book import L2Book, apply_snapshot, apply_delta
+    from bot.core.data_ws import PublicWS
+    from bot.core.features import basic_snapshot
+    from bot.core.signals.obflow import decide, OBFlowConfig
+    from bot.core.exec.broker import Broker, ExecConfig
+    from bot.core.exec.risk import compute_tp_sl, RiskConfig
+    from bot.core.recorder import Recorder
+
+    return {
+        "BybitV5Client": BybitV5Client,
+        "BybitAPIError": BybitAPIError,
+        "L2Book": L2Book,
+        "apply_snapshot": apply_snapshot,
+        "apply_delta": apply_delta,
+        "PublicWS": PublicWS,
+        "basic_snapshot": basic_snapshot,
+        "decide": decide,
+        "OBFlowConfig": OBFlowConfig,
+        "Broker": Broker,
+        "ExecConfig": ExecConfig,
+        "compute_tp_sl": compute_tp_sl,
+        "RiskConfig": RiskConfig,
+        "Recorder": Recorder,
+    }
 
 def _round_step(v: float, step: float | None) -> float:
     if not step or step <= 0:
@@ -24,6 +50,25 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return v.strip().lower() == "true"
 
+
+def _env_clean(name: str, default: str) -> str:
+    raw = os.environ.get(name, str(default))
+    return (raw.split("#", 1)[0].strip()) if raw is not None else str(default)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(_env_clean(name, str(default)))
+    except Exception:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(float(_env_clean(name, str(default))))
+    except Exception:
+        return default
+
 def _require_env_flags() -> None:
     live = os.environ.get("LIVE_MODE", "false").lower() == "true"
     testnet = os.environ.get("TESTNET", "false").lower() == "true"
@@ -32,6 +77,21 @@ def _require_env_flags() -> None:
         sys.exit(1)
 
 def main() -> None:
+    m = _import_runtime()
+    BybitV5Client = m["BybitV5Client"]
+    BybitAPIError = m["BybitAPIError"]
+    L2Book = m["L2Book"]
+    apply_snapshot = m["apply_snapshot"]
+    apply_delta = m["apply_delta"]
+    PublicWS = m["PublicWS"]
+    basic_snapshot = m["basic_snapshot"]
+    decide = m["decide"]
+    OBFlowConfig = m["OBFlowConfig"]
+    Broker = m["Broker"]
+    ExecConfig = m["ExecConfig"]
+    compute_tp_sl = m["compute_tp_sl"]
+    RiskConfig = m["RiskConfig"]
+    Recorder = m["Recorder"]
     _require_env_flags()
     if "DRY_RUN" not in os.environ:
         os.environ["DRY_RUN"] = "true"
@@ -40,10 +100,13 @@ def main() -> None:
     logs_dir = Path("logs/obflow_live")
     rec = Recorder(logs_dir / "events.jsonl")
     client = BybitV5Client(testnet=True, category="linear")
-    broker = Broker(client, ExecConfig(slippage_guard_bps=float(os.environ.get("SLIPPAGE_GUARD_BPS", "3") or 3)))
-    risk_cfg = RiskConfig(tp_pct=float(os.environ.get("TP_PCT", "0.0045") or 0.0045),
-                          sl_pct=float(os.environ.get("SL_PCT", "0.0035") or 0.0035),
-                          time_stop_sec=int(float(os.environ.get("TIME_STOP_SEC", "5") or 5)))
+    sg_bps = _env_float("SLIPPAGE_GUARD_BPS", -1.0)
+    if sg_bps <= 0:
+        sg_bps = _env_float("SLIPPAGE_GUARD_PCT", 0.0003) * 1e4
+    broker = Broker(client, ExecConfig(slippage_guard_bps=sg_bps))
+    risk_cfg = RiskConfig(tp_pct=_env_float("TP_PCT", 0.0045),
+                          sl_pct=_env_float("SL_PCT", 0.0035),
+                          time_stop_sec=_env_int("TIME_STOP_SEC", 5))
     ob_cfg = OBFlowConfig()
     qty_step = 0.001
     min_qty = 0.001
@@ -57,7 +120,7 @@ def main() -> None:
     ws = PublicWS(symbol=symbol, depth=1)
     book = L2Book(symbol=symbol)
     start = time.time()
-    max_sec = float(os.environ.get("MAX_SEC", "300") or 300)
+    max_sec = _env_float("MAX_SEC", 300.0)
     placed = 0
     for ev in ws.orderbook_stream():
         etype = ev.get("type")
