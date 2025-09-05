@@ -8,14 +8,6 @@ Patterns:
 """
 from __future__ import annotations
 
-"""OB-Flow v2: Pattern-based signal engine.
-
-Patterns:
-  A. Bid wall bounce
-  B. Ask wall break
-  C. Absorption then reversal
-  D. Sweep then mean-revert
-"""
 
 from dataclasses import dataclass
 from typing import Optional, Literal, Dict, Any
