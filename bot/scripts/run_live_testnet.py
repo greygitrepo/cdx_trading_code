@@ -340,6 +340,23 @@ def main() -> None:
         else:
             return entry_price * (1 - tp_gross), entry_price * (1 + sl_gross)
 
+    def _round_to_tick(price: float, tick: float | None, *, up: bool | None = None) -> float:
+        if not tick or tick <= 0:
+            return price
+        # Favorable rounding: up=True => ceil to tick, up=False => floor to tick, None => nearest down
+        mult = price / tick
+        if up is True:
+            from math import ceil
+
+            return ceil(mult) * tick
+        if up is False:
+            from math import floor
+
+            return floor(mult) * tick
+        from math import floor
+
+        return floor(mult) * tick
+
     leverage = _env_float("LEVERAGE", _env_float("LEVERAGE_DEFAULT", 10.0))
     enable_ws = _env_bool("ENABLE_PRIVATE_WS", False)
     # Fee rates (bps); will try API first, then fallback to env/defaults
@@ -809,6 +826,19 @@ def main() -> None:
                     entry_fee_bps=fe_bps,
                     exit_fee_bps=fx_bps,
                 )
+                # Favorable tick rounding
+                tick = flt.get("tickSize") if isinstance(flt, dict) else None
+                try:
+                    tick = float(tick) if tick is not None else None
+                except Exception:
+                    tick = None
+                if tick and tick > 0:
+                    if side_long:
+                        tp_on_create = _round_to_tick(tp_on_create, tick, up=True)
+                        sl_on_create = _round_to_tick(sl_on_create, tick, up=False)
+                    else:
+                        tp_on_create = _round_to_tick(tp_on_create, tick, up=False)
+                        sl_on_create = _round_to_tick(sl_on_create, tick, up=True)
             pos_mode = _position_mode()
             pos_idx = _position_idx_for_side(plan.side, pos_mode)
             res = client.place_order(
@@ -946,6 +976,19 @@ def main() -> None:
                                 entry_fee_bps=fe_bps,
                                 exit_fee_bps=fx_bps,
                             )
+                            # Favorable tick rounding
+                            tick = flt.get("tickSize") if isinstance(flt, dict) else None
+                            try:
+                                tick = float(tick) if tick is not None else None
+                            except Exception:
+                                tick = None
+                            if tick and tick > 0:
+                                if side_long:
+                                    tp_abs = _round_to_tick(tp_abs, tick, up=True)
+                                    sl_abs = _round_to_tick(sl_abs, tick, up=False)
+                                else:
+                                    tp_abs = _round_to_tick(tp_abs, tick, up=False)
+                                    sl_abs = _round_to_tick(sl_abs, tick, up=True)
                             client.set_trading_stop(
                                 symbol=symbol,
                                 trailingStop=trailing_abs,
