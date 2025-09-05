@@ -703,6 +703,30 @@ def main() -> None:
                 decision=f"{strat_name}:{'BUY' if signal > 0 else 'SELL'}",
             )
 
+        # Optional guard: avoid flipping position immediately on opposite signal
+        try:
+            allow_flip = os.environ.get("ALLOW_FLIP", "false").strip().lower() == "true"
+            pos_now = client.get_positions(category=category, symbol=symbol)
+            plist_now = pos_now.get("result", {}).get("list", [])
+            if plist_now:
+                p0 = plist_now[0]
+                cur_size = abs(float(p0.get("size") or 0))
+                cur_long = p0.get("side") == "Buy"
+                if cur_size > 0:
+                    sig_long = signal > 0
+                    if (sig_long != cur_long) and not allow_flip:
+                        logger.info("Opposite signal while position open; skip (ALLOW_FLIP=false)")
+                        slog.log_why_no_trade(
+                            ts=int(time.time() * 1000),
+                            symbol=symbol,
+                            reasons=["avoid_flip"],
+                            context={"cur_side": ("LONG" if cur_long else "SHORT"), "sig": ("LONG" if sig_long else "SHORT")},
+                        )
+                        time.sleep(loop_interval)
+                        continue
+        except Exception:
+            pass
+
         prefer_limit = spread <= 0.0005 and _env_bool("PREFER_LIMIT_DEFAULT", True)
         # Avoid taker near funding if configured and nextFundingTime is close
         try:
@@ -877,6 +901,83 @@ def main() -> None:
             entry_notional = plan.qty * entry_px
             entry_fee = _fee_amount(entry_notional, maker_fee_bps if is_maker_entry else taker_fee_bps)
             est_entry = {"side": plan.side, "qty": float(plan.qty), "avg": entry_px, "fee_remain": entry_fee}
+
+            # --- After entry: refresh position, reset trailing-stop, and re-apply based on actual avg_price ---
+            try:
+                # Small retry to allow position snapshot to reflect
+                avg_price_actual = None
+                side_long_actual = None
+                for _ in range(3):
+                    try:
+                        pos_now = client.get_positions(category=category, symbol=symbol)
+                        plist_now = pos_now.get("result", {}).get("list", [])
+                        if plist_now:
+                            p0 = plist_now[0]
+                            sz = abs(float(p0.get("size") or 0))
+                            if sz > 0:
+                                avg_price_actual = float(p0.get("avgPrice") or 0)
+                                side_long_actual = p0.get("side") == "Buy"
+                                break
+                    except Exception:
+                        pass
+                    time.sleep(0.2)
+
+                if avg_price_actual and avg_price_actual > 0 and side_long_actual is not None:
+                    # Cancel existing trailing stop first (if any)
+                    try:
+                        client.set_trading_stop(
+                            symbol=symbol,
+                            trailingStop="",
+                            category=category,
+                            positionIdx=(1 if side_long_actual else 2) if _position_mode() == "HEDGE" else None,
+                        )
+                        logger.info("Cleared existing trailing stop (if any)")
+                    except BybitAPIError:
+                        pass
+
+                    # Compute fee-aware TP/SL at actual avg and round to favorable ticks
+                    fe_bps = maker_fee_bps if os.environ.get("FEE_ASSUME_ENTRY", "auto").lower() == "maker" else (
+                        taker_fee_bps if os.environ.get("FEE_ASSUME_ENTRY", "auto").lower() == "taker" else (maker_fee_bps if is_maker_entry else taker_fee_bps)
+                    )
+                    fx_bps = taker_fee_bps if os.environ.get("FEE_ASSUME_EXIT", "taker").lower() != "maker" else maker_fee_bps
+                    tp_abs2, sl_abs2 = _fee_aware_targets(
+                        avg_price_actual,
+                        side_long=bool(side_long_actual),
+                        tp_net=_env_float("TP_PCT", 0.0010),
+                        sl_net=_env_float("SL_PCT", 0.0020),
+                        entry_fee_bps=fe_bps,
+                        exit_fee_bps=fx_bps,
+                    )
+                    tick = flt.get("tickSize") if isinstance(flt, dict) else None
+                    try:
+                        tick = float(tick) if tick is not None else None
+                    except Exception:
+                        tick = None
+                    if tick and tick > 0:
+                        if side_long_actual:
+                            tp_abs2 = _round_to_tick(tp_abs2, tick, up=True)
+                            sl_abs2 = _round_to_tick(sl_abs2, tick, up=False)
+                        else:
+                            tp_abs2 = _round_to_tick(tp_abs2, tick, up=False)
+                            sl_abs2 = _round_to_tick(sl_abs2, tick, up=True)
+                    trailing_abs2 = round(avg_price_actual * _env_float("SL_PCT", 0.0020), 4)
+
+                    try:
+                        client.set_trading_stop(
+                            symbol=symbol,
+                            trailingStop=trailing_abs2,
+                            takeProfit=tp_abs2,
+                            stopLoss=sl_abs2,
+                            category=category,
+                            positionIdx=(1 if side_long_actual else 2) if _position_mode() == "HEDGE" else None,
+                        )
+                        logger.info(
+                            f"Applied trailing stop after entry: tp={tp_abs2:.6f} sl={sl_abs2:.6f} trail={trailing_abs2:.6f}"
+                        )
+                    except BybitAPIError as e:
+                        logger.warning(f"Set trailing stop after entry failed: {e}")
+            except Exception:
+                pass
         except BybitAPIError as e:
             logger.error(f"Place order failed: {e}")
             time.sleep(loop_interval)
