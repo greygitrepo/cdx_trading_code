@@ -299,16 +299,32 @@ def main() -> None:
             logger.info(f"config:resolved {resolved}")
 
     _export_resolved_from_yaml()
-    # Load profile config if requested (overrides after base YAML export)
+    # Load profile config if requested (pure YAML overlay; no ENV mapping)
     if args.profile:
         try:
-            if args.profile == "quick-test":
-                qpath = _P("bot/configs/quick_test.yaml")
-                if qpath.exists():
-                    with qpath.open("r", encoding="utf-8") as f:
-                        _ = yaml.safe_load(f)  # reserved for future deep merge
-                _apply_profile_env("quick-test")
-                logger.info("Applied quick-test profile overrides")
+            prof_name = "quick_test" if args.profile == "quick-test" else args.profile
+            prof_path = _P(f"bot/configs/profiles/{prof_name}.yaml")
+            if prof_path.exists():
+                with prof_path.open("r", encoding="utf-8") as f:
+                    overlay = yaml.safe_load(f) or {}
+                # Shallow merge into runtime models (exchange/risk/params/runtime)
+                def _merge_obj(obj, ov):
+                    for k, v in (ov or {}).items():
+                        if hasattr(obj, k) and not isinstance(v, dict):
+                            setattr(obj, k, v)
+                        elif hasattr(obj, k) and isinstance(v, dict):
+                            _merge_obj(getattr(obj, k), v)
+                if overlay.get("exchange"):
+                    _merge_obj(runtime.app.exchange, overlay.get("exchange"))
+                if overlay.get("risk"):
+                    _merge_obj(runtime.app.risk, overlay.get("risk"))
+                if overlay.get("params"):
+                    _merge_obj(runtime.params, overlay.get("params"))
+                if overlay.get("runtime"):
+                    _merge_obj(runtime.app.runtime, overlay.get("runtime"))
+                logger.info(f"Applied profile overlay: {args.profile}")
+            else:
+                logger.warning(f"Profile not found: {prof_path}")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Profile load failed: {e}")
     require_env_flags(logger)

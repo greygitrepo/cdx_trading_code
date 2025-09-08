@@ -89,10 +89,27 @@ Env highlights
 - Switch to live by exporting `STUB_MODE=false` (WS live wiring not enabled in CI).
 
 ## Configuration
-- Default app config: `bot/configs/config.yaml`
-- Parameter pack is under `params` in `config.yaml`. OB-Flow thresholds live under `params.obflow`.
-You can load/validate via `bot.configs.schemas.load_app_config` and access `app.params`.
-- Universe/Rotation: `SYMBOL_UNIVERSE`, `DISCOVER_SYMBOLS`, `UNIVERSE_TOP_N`, `CONSENSUS_TICKS`, `NO_TRADE_SLEEP_SEC`, `LOOP_IDLE_SEC`, `EXIT_KEY`, `ORDER_SIZE_USDT`
+### YAML Single-Source (Unified)
+- Base: `bot/configs/config.yaml`
+- Profiles(overlay): `bot/configs/profiles/*.yaml` (e.g., `mainnet.yaml`, `testnet.yaml`, `quick_test.yaml`)
+- Strategy/Risk/Regime/Routing/Loop params live in YAML (not ENV).
+- Operational toggles via ENV only: `LIVE_MODE/TESTNET/STUB/PAPER`, `BYBIT_API_KEY/SECRET`, `DRY_RUN`, `ENABLE_PRIVATE_WS`.
+
+Runner reads YAML directly:
+- Risk: `risk.max_leverage`, `risk.max_alloc_pct`, `risk.min_free_balance_usdt`
+- Regime: `params.regime.strictness`, `params.universe.spread_threshold_pct`, `params.regime.spread_mult_pause`
+- Orderbook: `params.orderbook.min_depth_usd`
+- OB-Flow: `params.obflow.*`
+- Routing: `params.execution.*` (강시그널 → taker 승격)
+- Entry/Exit: `params.entry_exit.tp1/sl/trail_after_tp1`
+- Loop/Discovery: `runtime.discover_symbols/consensus_ticks/no_trade_sleep_sec/loop_idle_sec/exit_key/refresh_universe_each_loop`
+- Behavior: `runtime.avoid_duplicate_symbol/allow_flip/invert_signals/attach_tpsl_on_create`
+
+Profiles are applied as YAML overlay (no ENV mapping):
+```
+python bot/scripts/run_live_testnet.py --profile mainnet
+```
+Use `bot.configs.schemas.load_app_config` to load and inspect. Runner emits a `config:resolved` event with key params.
 
 ### OB-Flow thresholds (YAML)
 `bot/core/signals/obflow.py` reads thresholds from YAML via `OBFlowConfig.from_params(app.params)`.

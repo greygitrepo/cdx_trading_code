@@ -4,18 +4,29 @@ exchange:
   category: linear
 
 risk:
-  max_leverage: 7
-  max_symbols: 3
-  total_budget_usdt: null
-  use_balance_ratio: 0.9
+  max_leverage: 5
+  max_alloc_pct: 0.01
+  min_free_balance_usdt: 200
 
-orderbook:
-  min_depth_usd: 20000
+params:
+  orderbook:
+    min_depth_usd: 20000
+  entry_exit:
+    tp1: 0.0010
+    sl: 0.0015
+    trail_after_tp1: 0.0008
+  funding_time:
+    avoid_taker_within_min: 5
+  execution:
+    dynamic_taker_on_strong: true
+    tps_min: 8.0
+    imb_l5_min: 0.25
+    spread_max: 0.0006
 
-entry_exit:
-  tp1: 0.0010
-  sl: 0.0015
-  trail_after_tp1: 0.0008
-
-funding_time:
-  avoid_taker_within_min: 5
+runtime:
+  discover_symbols: false
+  consensus_ticks: 3
+  no_trade_sleep_sec: 5.0
+  loop_idle_sec: 1.0
+  exit_key: "q"
+  refresh_universe_each_loop: true
