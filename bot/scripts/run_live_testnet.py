@@ -1021,6 +1021,7 @@ def main() -> None:
                 entry_liquidity=("maker" if (plan.order_type == "Limit" and po) else "taker"),
                 entry_fee_usdt=entry_fee,
                 entry_slippage_pct=0.0,
+                entry_mid_ref=mid,
             )
             # Estimate entry fee for later PnL calculations
             po = prefer_limit and _env_bool("MAKER_POST_ONLY", True)
@@ -1102,6 +1103,10 @@ def main() -> None:
                         logger.info(
                             f"Applied trailing stop after entry: tp={tp_abs2:.6f} sl={sl_abs2:.6f} trail={trailing_abs2:.6f}"
                         )
+                        try:
+                            ledger.set_stops(symbol, tp_abs=tp_abs2, sl_abs=sl_abs2, trail_abs=trailing_abs2)
+                        except Exception:
+                            pass
                     except BybitAPIError as e:
                         logger.warning(f"Set trailing stop after entry failed: {e}")
             except Exception:
@@ -1262,6 +1267,8 @@ def main() -> None:
                                 entry_fee = 0.0
                                 exit_fee = 0.0
                                 realized = 0.0
+                                entry_px_agg = []
+                                exit_px_agg = []
                                 # Best-effort aggregation by side
                                 for it in fills:
                                     try:
@@ -1274,6 +1281,10 @@ def main() -> None:
                                             # Approx: use sign to compute PnL delta if both legs present
                                             realized += (price_f - avg_price) * qty_f if side_long and side_f == "SELL" else 0.0
                                             realized += (avg_price - price_f) * qty_f if (not side_long) and side_f == "BUY" else 0.0
+                                            if (side_long and side_f == "BUY") or ((not side_long) and side_f == "SELL"):
+                                                entry_px_agg.append((price_f, qty_f, is_maker))
+                                            else:
+                                                exit_px_agg.append((price_f, qty_f, is_maker))
                                         # Split fees roughly
                                         if side_f == ("BUY" if side_long else "SELL"):
                                             entry_fee += fee_f
@@ -1282,17 +1293,41 @@ def main() -> None:
                                     except Exception:
                                         continue
                                 total_fee = entry_fee + exit_fee
+                                # Determine exit reason heuristically
+                                reason = "TIME_STOP"
+                                try:
+                                    rec = ledger.active.get(symbol)
+                                    if rec and rec.tp_abs and rec.sl_abs:
+                                        tol = (flt.get("tickSize") or 0.0) or 0.0
+                                        last_exit_px = exit_px_agg[-1][0] if exit_px_agg else mid
+                                        if side_long and abs(last_exit_px - rec.tp_abs) <= max(2*tol, rec.tp_abs*1e-5):
+                                            reason = "TP"
+                                        elif side_long and abs(last_exit_px - rec.sl_abs) <= max(2*tol, rec.sl_abs*1e-5):
+                                            reason = "SL"
+                                        elif (not side_long) and abs(last_exit_px - rec.tp_abs) <= max(2*tol, rec.tp_abs*1e-5):
+                                            reason = "TP"
+                                        elif (not side_long) and abs(last_exit_px - rec.sl_abs) <= max(2*tol, rec.sl_abs*1e-5):
+                                            reason = "SL"
+                                        else:
+                                            reason = "TRAIL"
+                                except Exception:
+                                    pass
                                 ledger.on_exit(
                                     symbol=symbol,
                                     exit_ts=end_ms,
                                     price=mid,
                                     qty=size,
-                                    reason="TIME_STOP",
+                                    reason=reason,
                                     exit_liquidity="taker",
                                     exit_fee_usdt=exit_fee,
                                     exit_slippage_pct=0.0,
                                     realized_pnl_usdt=realized - total_fee,
+                                    exit_mid_ref=mid,
                                 )
+                                try:
+                                    ledger.write_daily_summary()
+                                except Exception:
+                                    pass
                             except Exception:
                                 pass
                         except BybitAPIError as e:

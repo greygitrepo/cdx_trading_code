@@ -20,6 +20,7 @@ class TradeRecord:
     entry_liquidity: Optional[str] = None  # maker/taker
     entry_fee_usdt: float = 0.0
     entry_slippage_pct: float = 0.0
+    entry_mid_ref: Optional[float] = None
 
     exit_time: Optional[int] = None
     exit_price: float = 0.0
@@ -28,6 +29,7 @@ class TradeRecord:
     exit_liquidity: Optional[str] = None
     exit_fee_usdt: float = 0.0
     exit_slippage_pct: float = 0.0
+    exit_mid_ref: Optional[float] = None
     exit_reason: Optional[str] = None
 
     hold_secs: Optional[int] = None
@@ -53,6 +55,9 @@ class TradeRecord:
     trail_armed_at_price: Optional[float] = None
     trail_steps: int = 0
     max_trail_offset_pct: Optional[float] = None
+    tp_abs: Optional[float] = None
+    sl_abs: Optional[float] = None
+    trail_abs: Optional[float] = None
 
 
 @dataclass
@@ -99,6 +104,7 @@ class TradeLedger:
         entry_liquidity: Optional[str] = None,
         entry_fee_usdt: float = 0.0,
         entry_slippage_pct: float = 0.0,
+        entry_mid_ref: Optional[float] = None,
     ) -> TradeRecord:
         tid = f"{self.run_id}_{symbol}_{entry_ts}"
         rec = TradeRecord(
@@ -112,6 +118,7 @@ class TradeLedger:
             entry_liquidity=entry_liquidity,
             entry_fee_usdt=entry_fee_usdt,
             entry_slippage_pct=entry_slippage_pct,
+            entry_mid_ref=entry_mid_ref,
             spread_pct_at_entry=spread_pct,
             imbalance_L5=imbalance_L5,
             depth_L5_bid_usd=depth_bid_usd,
@@ -129,6 +136,14 @@ class TradeLedger:
         rec.max_favorable_excursion_pct = max(rec.max_favorable_excursion_pct, change)
         rec.max_adverse_excursion_pct = min(rec.max_adverse_excursion_pct, change)
 
+    def set_stops(self, symbol: str, *, tp_abs: Optional[float], sl_abs: Optional[float], trail_abs: Optional[float]) -> None:
+        rec = self.active.get(symbol)
+        if not rec:
+            return
+        rec.tp_abs = tp_abs
+        rec.sl_abs = sl_abs
+        rec.trail_abs = trail_abs
+
     def on_exit(
         self,
         *,
@@ -141,6 +156,7 @@ class TradeLedger:
         exit_fee_usdt: float = 0.0,
         exit_slippage_pct: float = 0.0,
         realized_pnl_usdt: float = 0.0,
+        exit_mid_ref: Optional[float] = None,
     ) -> Optional[TradeRecord]:
         rec = self.active.pop(symbol, None)
         if not rec:
@@ -153,6 +169,7 @@ class TradeLedger:
         rec.exit_liquidity = exit_liquidity
         rec.exit_fee_usdt = exit_fee_usdt
         rec.exit_slippage_pct = exit_slippage_pct
+        rec.exit_mid_ref = exit_mid_ref
         rec.hold_secs = max(0, int((exit_ts - rec.entry_time) / 1000))
         rec.realized_pnl_usdt = realized_pnl_usdt
         if rec.entry_value_usdt > 0:
@@ -179,3 +196,81 @@ class TradeLedger:
             obj = rec.__dict__.copy()
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
+    def write_daily_summary(self) -> None:
+        """Compute simple daily summary from today's CSV and write JSON next to it."""
+        csv_path, jsonl_path = self._date_paths()
+        if not csv_path.exists():
+            return
+        trades = 0
+        wins = 0
+        losses = 0
+        pnl_list: list[float] = []
+        fees: float = 0.0
+        hold_secs: list[int] = []
+        entry_liqs: list[str] = []
+        exit_liqs: list[str] = []
+        # Equity curve for DD
+        curve: list[float] = []
+        cum = 0.0
+        with csv_path.open() as f:
+            r = csv.DictReader(f)
+            for row in r:
+                try:
+                    trades += 1
+                    pnl = float(row["realized_pnl_usdt"])
+                    pnl_list.append(pnl)
+                    wins += 1 if pnl > 0 else 0
+                    losses += 1 if pnl < 0 else 0
+                    fees += float(row.get("entry_fee_usdt", 0.0) or 0.0) + float(row.get("exit_fee_usdt", 0.0) or 0.0)
+                    hs = int(row.get("hold_secs", 0) or 0)
+                    hold_secs.append(hs)
+                    el = (row.get("entry_liquidity") or "").lower()
+                    xl = (row.get("exit_liquidity") or "").lower()
+                    entry_liqs.append(el)
+                    exit_liqs.append(xl)
+                    cum += pnl
+                    curve.append(cum)
+                except Exception:
+                    continue
+        def _dd(xs: list[float]) -> float:
+            peak = -1e18
+            mdd = 0.0
+            for v in xs:
+                if v > peak:
+                    peak = v
+                mdd = min(mdd, v - peak)
+            return mdd
+        date = csv_path.stem.split("trades_")[-1]
+        gross = sum(pnl_list)
+        net = gross  # fees already embedded in realized if we passed net; else subtract fees
+        wr = (wins / trades) if trades else 0.0
+        avg_win = (sum(p for p in pnl_list if p > 0) / wins) if wins else 0.0
+        avg_loss = (sum(-p for p in pnl_list if p < 0) / losses) if losses else 0.0
+        rr = (avg_win / avg_loss) if avg_loss > 0 else 0.0
+        expectancy = wr * avg_win - (1 - wr) * avg_loss
+        dd = _dd(curve)
+        pf = (sum(p for p in pnl_list if p > 0) / sum(-p for p in pnl_list if p < 0)) if losses else 0.0
+        def _ratio(liqs: list[str], key: str) -> float:
+            n = sum(1 for x in liqs if x == key)
+            return (n / len(liqs)) if liqs else 0.0
+        summary = {
+            "date": date,
+            "trades": trades,
+            "win": wins,
+            "loss": losses,
+            "win_rate": wr,
+            "avg_win_usdt": avg_win,
+            "avg_loss_usdt": avg_loss,
+            "RR": rr,
+            "expectancy_usdt": expectancy,
+            "gross_pnl_usdt": gross,
+            "fees_usdt": fees,
+            "net_pnl_usdt": net,
+            "max_drawdown_usdt": dd,
+            "profit_factor": pf,
+            "holding_time_median_secs": (sorted(hold_secs)[len(hold_secs)//2] if hold_secs else 0),
+            "maker_ratio_entry": _ratio(entry_liqs, "maker"),
+            "maker_ratio_exit": _ratio(exit_liqs, "maker"),
+        }
+        out = self.out_dir / f"summary_{date}.json"
+        out.write_text(json.dumps(summary, ensure_ascii=False, indent=2))
