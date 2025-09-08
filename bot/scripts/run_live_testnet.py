@@ -634,6 +634,47 @@ def main() -> None:
             time.sleep(loop_interval)
             continue
 
+        # 2.9) Optional: skip symbols with existing position or opening orders to avoid duplicate invests
+        try:
+            if os.environ.get("AVOID_DUPLICATE_SYMBOL", "true").strip().lower() == "true":
+                pos_now = client.get_positions(category=category, symbol=symbol)
+                plist_now = pos_now.get("result", {}).get("list", [])
+                has_pos = False
+                if plist_now:
+                    try:
+                        p0 = plist_now[0]
+                        has_pos = abs(float(p0.get("size") or 0)) > 0
+                    except Exception:
+                        has_pos = False
+                if has_pos:
+                    logger.info("Skip: existing position for symbol (avoid duplicate)")
+                    slog.log_why_no_trade(
+                        ts=int(time.time() * 1000),
+                        symbol=symbol,
+                        reasons=["skip_existing_position"],
+                        context={},
+                    )
+                    time.sleep(loop_interval)
+                    continue
+                # Also skip if there are open opening orders (best-effort)
+                try:
+                    oo = client.get_open_orders(symbol=symbol)
+                    olist = oo.get("result", {}).get("list", [])
+                    if olist:
+                        logger.info("Skip: open orders present for symbol (avoid duplicate)")
+                        slog.log_why_no_trade(
+                            ts=int(time.time() * 1000),
+                            symbol=symbol,
+                            reasons=["skip_open_orders"],
+                            context={"open_orders": len(olist)},
+                        )
+                        time.sleep(loop_interval)
+                        continue
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # 3) Strategy selection
         if strategy == "obflow":
             # OB-Flow는 L2Book 특징이 필요 — mid/spread/마이크로를 기반으로 하므로 여기서 간단히 재계산
@@ -653,6 +694,13 @@ def main() -> None:
                 time.sleep(loop_interval)
                 continue
             signal = +1 if str(sig["side"]).upper() == "BUY" else -1
+            # Invert signals if requested: BUY->short, SELL->long
+            try:
+                if os.environ.get("INVERT_SIGNALS", "false").strip().lower() == "true":
+                    signal *= -1
+                    logger.info("Signal inversion active: flipping OB-Flow direction")
+            except Exception:
+                pass
             logger.info(f"OB-Flow selected: {sig['type']} -> {sig['side']}")
             slog.log_signal(
                 ts=int(time.time() * 1000), symbol=symbol, scores={"obflow": feat}, decision=f"OBF:{sig['type']}:{sig['side']}"
@@ -693,6 +741,12 @@ def main() -> None:
                 time.sleep(loop_interval)
                 continue
             signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
+            try:
+                if os.environ.get("INVERT_SIGNALS", "false").strip().lower() == "true":
+                    signal *= -1
+                    logger.info("Signal inversion active: flipping pack strategy direction")
+            except Exception:
+                pass
             logger.info(
                 f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal > 0 else 'SELL')}"
             )
