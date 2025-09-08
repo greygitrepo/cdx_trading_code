@@ -76,11 +76,11 @@ Safety and notes
 - Logging: structured JSONL events under `logs/run_*/events.jsonl` and a rotating `app.log`.
 - Optional WS: set `ENABLE_PRIVATE_WS=true` and install `websocket-client` to stream private `order/execution/position` events into JSONL.
 
-Env highlights
-- `LEVERAGE`, `MAX_ALLOC_PCT`, `MIN_FREE_BALANCE_USDT`, `SLIPPAGE_GUARD_PCT`, `DRY_RUN`
-- Regime/signal: `MIS_SPREAD_THRESHOLD`, `SPREAD_PAUSE_MULT`, `MIN_DEPTH_USD`
-- Funding guard: `AVOID_TAKER_WITHIN_MIN`
-- Protection: `TP_PCT`, `SL_PCT`, `TRAIL_AFTER_TP1_PCT`, `TIME_STOP_SEC`
+Env highlights (operational only)
+- Modes: `LIVE_MODE`, `TESTNET`, `STUB_MODE`, `PAPER_MODE`
+- Secrets: `BYBIT_API_KEY`, `BYBIT_API_SECRET`
+- Operational toggles: `DRY_RUN`, `ENABLE_PRIVATE_WS`, `TIME_STOP_SEC`(override), optional `ORDER_SIZE_USDT`
+All strategy/risk/loop parameters are defined in YAML (config/profiles).
 
 ## Data Layer (Stub/Live)
 - Modes via env: `STUB_MODE` (default true), `PAPER_MODE` (default true), `LIVE_MODE` (default false).
