@@ -45,22 +45,39 @@ params:
       bias_only: true               # 바이어스 반대 진입 금지
 
   orderbook:
-    obi_window_ms: 1500
-    obi_threshold_mis: 0.60
-    min_depth_usd: 50000           # 15000 → 50000
+    obi_window_ms: 1500            # OBI 계산 윈도우(ms)
+    obi_threshold_mis: 0.60        # MIS용 OBI 임계
+    min_depth_usd: 50000           # L1 명목 유동성(USDT) 최소
 
   # OB-Flow signal thresholds (A/B/C/D)
   obflow:
-    depth_imb_L5_min: 0.18
-    spread_tight_mult_mid: 0.0008
+    # L5 불균형 기준 (절대값이 클수록 한쪽 벽이 강함)
+    depth_imb_L5_min: 0.3
+    # 스프레드가 mid 대비 이 값 이하일 때 ‘타이트’로 간주
+    spread_tight_mult_mid: 0.0006
+    # 돌파 패턴용 TPS(틱/초) 임계
     tps_min_breakout: 8.0
-    c_absorption_min: 0.35
-    d_wide_spread_mult_mid: 0.0015
-    d_micro_dev_mult_spread: 0.40
+    # 흡수 후 반전 강도 임계
+    c_absorption_min: 0.5
+    # 스윕 후 평균회귀: 와이드 스프레드 임계(= mid*멀티)
+    d_wide_spread_mult_mid: 0.0025
+    # 마이크로 괴리/스프레드 비율 임계
+    d_micro_dev_mult_spread: 0.65
+
+  # 라우팅(메이커/테이커) 동적 전환 기준
+  execution:
+    # 강시그널이면 maker→taker 승격 허용 여부
+    dynamic_taker_on_strong: true
+    # 승격 기준들(2개 이상 충족 시 적용)
+    tps_min: 8.0          # 틱/초 최소
+    imb_l5_min: 0.25      # L5 불균형 최소
+    spread_max: 0.0006    # 스프레드 상한(%)
+    breakout_sigma: 0.0   # 표준편차 배수 임계(미사용시 0)
 
   entry_exit:
-    tp1: 0.0012                     # 0.10% → 0.12%
-    trail_after_tp1: 0.0008
+    # 순손익 기준 목표치(수수료 보정/틱 라운딩 적용)
+    tp1: 0.0012                     # +0.12%
+    trail_after_tp1: 0.0008         # +0.08%에서 트레일링 무장
     # 타임스탑을 전략별로 단축(분포를 좁혀 빠른 손절·정리)
     time_stop_mis: "15-25"          # "30-40" → "15-25"
     time_stop_vrs: "10-20"          # "20-30" → "10-20"

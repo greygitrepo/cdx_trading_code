@@ -323,6 +323,10 @@ def main() -> None:
     # Load YAML once for OB-Flow thresholds
     runtime = load_runtime()
     ob_cfg = OBFlowConfig.from_params(runtime.params)
+    ee = runtime.params.entry_exit
+    obp = runtime.params.orderbook
+    fund = runtime.params.funding_time
+    execp = getattr(runtime.params, "execution", None)
     # Strategy selection precedence: CLI > ENV > config
     strategy = (args.strategy or "").strip().lower()
     if not strategy:
@@ -418,7 +422,7 @@ def main() -> None:
     # Regime/signal thresholds
     spread_threshold = _env_float("MIS_SPREAD_THRESHOLD", 0.0004)
     spread_pause_mult = _env_float("SPREAD_PAUSE_MULT", 3.0)
-    min_depth_usd = _env_float("MIN_DEPTH_USD", 5000.0)
+    min_depth_usd = float(getattr(obp, "min_depth_usd", 5000.0))
 
     # 1) API key validation
     try:
@@ -911,14 +915,14 @@ def main() -> None:
             pass
 
         # Dynamic routing: default maker(PostOnly) unless strong signal suggests taker
-        prefer_limit = _env_bool("PREFER_LIMIT_DEFAULT", True)
-        dyn_taker = os.environ.get("DYNAMIC_TAKER_ON_STRONG", "true").strip().lower() == "true"
+        prefer_limit = bool(runtime.app.exchange.maker_post_only)
+        dyn_taker = bool(execp.dynamic_taker_on_strong) if execp else True
         if dyn_taker:
             met = []
             # Simple proxies
-            tps_min = _env_float("DYN_TAKER_TPS_MIN", 8.0)
-            imb_min = _env_float("DYN_TAKER_IMB_L5_MIN", 0.25)
-            spr_max = _env_float("DYN_TAKER_SPREAD_MAX", 0.0006)
+            tps_min = float(execp.tps_min) if execp else 8.0
+            imb_min = float(execp.imb_l5_min) if execp else 0.25
+            spr_max = float(execp.spread_max) if execp else 0.0006
             if vols.list() and len(vols.list()) >= 2:
                 tps = max(0.0, (vols.list()[-1] - vols.list()[-2]))  # crude proxy
                 if tps >= tps_min:
@@ -932,7 +936,7 @@ def main() -> None:
                 logger.info(f"Routing=taker by strong-signal ({','.join(met)})")
         # Avoid taker near funding if configured and nextFundingTime is close
         try:
-            avoid_min = _env_float("AVOID_TAKER_WITHIN_MIN", 5.0)
+            avoid_min = float(getattr(fund, 'avoid_taker_within_min', 5))
             if not prefer_limit and avoid_min > 0:
                 tk = client.get_tickers(category=category, symbol=symbol)
                 nxt = tk.get("result", {}).get("list", [{}])[0].get("nextFundingTime")
@@ -1047,8 +1051,8 @@ def main() -> None:
                 tp_on_create, sl_on_create = _fee_aware_targets(
                     base_px,
                     side_long=side_long,
-                    tp_net=_env_float("TP_PCT", 0.0010),
-                    sl_net=_env_float("SL_PCT", 0.0020),
+                    tp_net=float(ee.tp1),
+                    sl_net=float(getattr(ee, 'sl', 0.0020)),
                     entry_fee_bps=fe_bps,
                     exit_fee_bps=fx_bps,
                 )

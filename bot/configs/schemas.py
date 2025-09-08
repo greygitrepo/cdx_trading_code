@@ -84,12 +84,25 @@ class OBFlowParams(BaseModel):
     Keep defaults conservative; profiles may override in YAML.
     """
 
-    depth_imb_L5_min: float = 0.18
-    spread_tight_mult_mid: float = 0.0008
+    depth_imb_L5_min: float = 0.3
+    spread_tight_mult_mid: float = 0.0006
     tps_min_breakout: float = 8.0
-    c_absorption_min: float = 0.35
-    d_wide_spread_mult_mid: float = 0.0015
-    d_micro_dev_mult_spread: float = 0.40
+    c_absorption_min: float = 0.5
+    d_wide_spread_mult_mid: float = 0.0025
+    d_micro_dev_mult_spread: float = 0.65
+
+
+class ExecutionRoutingParams(BaseModel):
+    """Dynamic routing thresholds and toggles.
+
+    If dynamic_taker_on_strong is true, maker→taker 승격 조건을 아래 임계값 2개 이상 충족 시 적용.
+    """
+
+    dynamic_taker_on_strong: bool = True
+    tps_min: float = 8.0
+    imb_l5_min: float = 0.25
+    spread_max: float = 0.0006
+    breakout_sigma: float = 0.0
 
 
 class EntryExitParams(BaseModel):
@@ -119,6 +132,7 @@ class ParamsPack(BaseModel):
     indicators: IndicatorParams = IndicatorParams()
     orderbook: OrderBookParams = OrderBookParams()
     obflow: OBFlowParams = OBFlowParams()
+    execution: ExecutionRoutingParams = ExecutionRoutingParams()
     entry_exit: EntryExitParams = EntryExitParams()
     funding_time: FundingTimeParams = FundingTimeParams()
 

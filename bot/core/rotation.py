@@ -48,7 +48,7 @@ class Universe:
     discovered: bool
 
 
-def build_universe(client: BybitV5Client) -> Universe:
+def build_universe(client: BybitV5Client, *, topN: int | None = None, discover: bool | None = None) -> Universe:
     # 1) Static list if provided
     raw = _env_str("SYMBOL_UNIVERSE", "").strip()
     if raw:
@@ -59,9 +59,9 @@ def build_universe(client: BybitV5Client) -> Universe:
     # Allow profile-level control via PROFILE env (quick-test disables discovery by default)
     prof = _env_str("PROFILE", "").lower()
     discover_default = False if prof == "quick-test" else True
-    if _env_bool("DISCOVER_SYMBOLS", discover_default):
+    if _env_bool("DISCOVER_SYMBOLS", discover_default) if discover is None else discover:
         cat = _env_str("CATEGORY", _env_str("BYBIT_CATEGORY", "linear"))
-        topn = _env_int("UNIVERSE_TOP_N", 10)
+        topn = topN if topN is not None else _env_int("UNIVERSE_TOP_N", 10)
         try:
             # instruments-info for trading symbols
             ins = client.get_instruments(category=cat)
