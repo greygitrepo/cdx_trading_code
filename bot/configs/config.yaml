@@ -110,3 +110,4 @@ runtime:
   allow_flip: false                # 보유 중 반대 신호 즉시 플립 허용
   invert_signals: false            # 신호 반전(BUY↔SELL)
   attach_tpsl_on_create: false     # 주문 생성 시 TP/SL 부착
+  summary_interval_sec: 600        # 세션 요약 갱신 주기(초)

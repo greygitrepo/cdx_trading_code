@@ -174,6 +174,7 @@ class RuntimeOptions(BaseModel):
     allow_flip: bool = False
     invert_signals: bool = False
     attach_tpsl_on_create: bool = False
+    summary_interval_sec: int = 600
 
 
 try:

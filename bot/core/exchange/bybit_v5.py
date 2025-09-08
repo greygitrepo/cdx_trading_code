@@ -452,6 +452,7 @@ class BybitV5Client:
         qty: str | float,
         category: Optional[str] = None,
         positionIdx: Optional[int] = None,
+        orderLinkId: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Close position with a market reduce-only order."""
         canon_side = _canon_side(side)
@@ -464,6 +465,7 @@ class BybitV5Client:
             "reduceOnly": True,
             "timeInForce": "IOC",
             "positionIdx": positionIdx,
+            "orderLinkId": orderLinkId,
         }
         return self._request("POST", "/v5/order/create", data=payload, auth=True)
 

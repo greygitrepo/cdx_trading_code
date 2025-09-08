@@ -549,7 +549,7 @@ def main() -> None:
         # Exit hint cache per symbol from execution/order topics
         exit_hint: dict[str, str] = {}
         last_summary_ms = int(time.time() * 1000)
-        SUMMARY_INTERVAL_MS = 10 * 60 * 1000  # 10 minutes
+        SUMMARY_INTERVAL_MS = int(getattr(runtime.app.runtime, 'summary_interval_sec', 600)) * 1000
 
         def _on_ws_msg(msg: dict[str, Any]) -> None:
             # Minimal parse for execution/order topics to enrich ledger
@@ -1323,6 +1323,7 @@ def main() -> None:
                             if pq > 0:
                                 try:
                                     pos_idx2 = 1 if side_long else 2 if _position_mode() == "HEDGE" else None
+                                    link_partial = f"cdx-partial-{int(time.time()*1000)}"
                                     client.place_order(
                                         symbol=symbol,
                                         side=("Sell" if side_long else "Buy"),
@@ -1331,8 +1332,13 @@ def main() -> None:
                                         timeInForce="IOC",
                                         reduceOnly=True,
                                         category=category,
+                                        orderLinkId=link_partial,
                                         positionIdx=pos_idx2,
                                     )
+                                    try:
+                                        ledger.on_order_submitted(symbol, link_partial, for_entry=False, label="partial_close")
+                                    except Exception:
+                                        pass
                                     logger.info(
                                         f"OB-Flow partial close executed qty={pq:.6f} at TP1 move={move:.5f}"
                                     )
@@ -1418,13 +1424,19 @@ def main() -> None:
                         try:
                             qty = size
                             side = "SELL" if side_long else "BUY"
+                            link_ts = f"cdx-time-{int(time.time()*1000)}"
                             client.close_position_market(
                                 symbol=symbol,
                                 side=side,
                                 qty=str(qty),
                                 category=category,
                                 positionIdx=(1 if side_long else 2) if _position_mode() == "HEDGE" else None,
+                                orderLinkId=link_ts,
                             )
+                            try:
+                                ledger.on_order_submitted(symbol, link_ts, for_entry=False, label="time_stop")
+                            except Exception:
+                                pass
                             logger.info(
                                 f"Time stop triggered after {held_sec}s; closing position"
                             )

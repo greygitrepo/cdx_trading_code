@@ -44,6 +44,7 @@ class TradeRecord:
     exit_links: list[str] = field(default_factory=list)
     entry_qty_filled: float = 0.0
     exit_qty_filled: float = 0.0
+    link_labels: dict[str, str] = field(default_factory=dict)  # orderLinkId -> label (entry/partial_close/time_stop/...)
 
     # Market context at entry (best-effort)
     spread_pct_at_entry: Optional[float] = None
@@ -132,13 +133,15 @@ class TradeLedger:
         self.active[symbol] = rec
         return rec
 
-    def on_order_submitted(self, symbol: str, order_link_id: str, *, for_entry: bool) -> None:
+    def on_order_submitted(self, symbol: str, order_link_id: str, *, for_entry: bool, label: str | None = None) -> None:
         rec = self.active.get(symbol)
         if not rec:
             return
         rec.orders_submitted += 1
         if order_link_id:
             (rec.entry_links if for_entry else rec.exit_links).append(order_link_id)
+            if label:
+                rec.link_labels[order_link_id] = label
 
     def on_order_canceled(self, symbol: str) -> None:
         rec = self.active.get(symbol)
@@ -272,6 +275,9 @@ class TradeLedger:
         hold_secs: list[int] = []
         entry_liqs: list[str] = []
         exit_liqs: list[str] = []
+        # For taker slippage
+        taker_slip_numer = 0.0
+        taker_slip_denom = 0.0
         # Equity curve for DD
         curve: list[float] = []
         cum = 0.0
@@ -291,6 +297,19 @@ class TradeLedger:
                     xl = (row.get("exit_liquidity") or "").lower()
                     entry_liqs.append(el)
                     exit_liqs.append(xl)
+                    try:
+                        eqf = float(row.get("entry_qty_filled", 0.0) or 0.0)
+                        exqf = float(row.get("exit_qty_filled", 0.0) or 0.0)
+                        eslip = float(row.get("entry_slippage_pct", 0.0) or 0.0)
+                        xslip = float(row.get("exit_slippage_pct", 0.0) or 0.0)
+                        if el == "taker" and eqf > 0:
+                            taker_slip_numer += eslip * eqf
+                            taker_slip_denom += eqf
+                        if xl == "taker" and exqf > 0:
+                            taker_slip_numer += xslip * exqf
+                            taker_slip_denom += exqf
+                    except Exception:
+                        pass
                     cum += pnl
                     curve.append(cum)
                 except Exception:
@@ -334,6 +353,7 @@ class TradeLedger:
             "holding_time_median_secs": (sorted(hold_secs)[len(hold_secs)//2] if hold_secs else 0),
             "maker_ratio_entry": _ratio(entry_liqs, "maker"),
             "maker_ratio_exit": _ratio(exit_liqs, "maker"),
+            "avg_slippage_taker_pct": (taker_slip_numer / taker_slip_denom) if taker_slip_denom > 0 else 0.0,
         }
         out = self.out_dir / f"summary_{date}.json"
         out.write_text(json.dumps(summary, ensure_ascii=False, indent=2))
