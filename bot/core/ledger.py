@@ -40,6 +40,10 @@ class TradeRecord:
     orders_submitted: int = 0
     orders_filled: int = 0
     orders_canceled: int = 0
+    entry_links: list[str] = field(default_factory=list)
+    exit_links: list[str] = field(default_factory=list)
+    entry_qty_filled: float = 0.0
+    exit_qty_filled: float = 0.0
 
     # Market context at entry (best-effort)
     spread_pct_at_entry: Optional[float] = None
@@ -127,6 +131,65 @@ class TradeLedger:
         )
         self.active[symbol] = rec
         return rec
+
+    def on_order_submitted(self, symbol: str, order_link_id: str, *, for_entry: bool) -> None:
+        rec = self.active.get(symbol)
+        if not rec:
+            return
+        rec.orders_submitted += 1
+        if order_link_id:
+            (rec.entry_links if for_entry else rec.exit_links).append(order_link_id)
+
+    def on_order_canceled(self, symbol: str) -> None:
+        rec = self.active.get(symbol)
+        if not rec:
+            return
+        rec.orders_canceled += 1
+
+    def on_execution(
+        self,
+        *,
+        symbol: str,
+        side: str,  # BUY/SELL
+        price: float,
+        qty: float,
+        fee_usdt: float,
+        is_maker: bool,
+        order_link_id: str | None,
+        mid_ref: float | None = None,
+    ) -> None:
+        rec = self.active.get(symbol)
+        if not rec or qty <= 0 or price <= 0:
+            return
+        rec.orders_filled += 1
+        side_long = rec.side == "LONG"
+        is_entry_leg = (side == "BUY" and side_long) or (side == "SELL" and (not side_long))
+        if is_entry_leg:
+            rec.entry_fee_usdt += fee_usdt
+            rec.entry_qty_filled += qty
+            if mid_ref and mid_ref > 0 and rec.entry_mid_ref:
+                # weighted average slippage vs entry mid
+                base = rec.entry_mid_ref
+                slip = (price - base) / base if side == "BUY" else (base - price) / base
+                # running avg
+                total_qty = max(1e-12, rec.entry_qty_filled)
+                rec.entry_slippage_pct = ((rec.entry_slippage_pct * (total_qty - qty)) + (slip * qty)) / total_qty
+            if is_maker and not rec.entry_liquidity:
+                rec.entry_liquidity = "maker"
+            elif rec.entry_liquidity is None and not is_maker:
+                rec.entry_liquidity = "taker"
+        else:
+            rec.exit_fee_usdt += fee_usdt
+            rec.exit_qty_filled += qty
+            if mid_ref and mid_ref > 0 and rec.exit_mid_ref:
+                base = rec.exit_mid_ref
+                slip = (price - base) / base if side == "SELL" else (base - price) / base
+                total_qty = max(1e-12, rec.exit_qty_filled)
+                rec.exit_slippage_pct = ((rec.exit_slippage_pct * (total_qty - qty)) + (slip * qty)) / total_qty
+            if is_maker and not rec.exit_liquidity:
+                rec.exit_liquidity = "maker"
+            elif rec.exit_liquidity is None and not is_maker:
+                rec.exit_liquidity = "taker"
 
     def update_mfe_mae(self, symbol: str, now_price: float) -> None:
         rec = self.active.get(symbol)

@@ -478,15 +478,53 @@ def main() -> None:
     if enable_ws and BybitPrivateWS is not None:
 
         def _on_ws_msg(msg: dict[str, Any]) -> None:
-            slog.log_info(
-                ts=int(time.time() * 1000), symbol=None, tag="ws", payload=msg
-            )
+            # Minimal parse for execution/order topics to enrich ledger
+            try:
+                topic = str(msg.get("topic") or "")
+                data = msg.get("data") or msg.get("result") or {}
+                now_ts = int(time.time() * 1000)
+                if topic.startswith("execution"):
+                    items = data if isinstance(data, list) else data.get("list") or []
+                    for it in items:
+                        try:
+                            sym = it.get("symbol")
+                            side = str(it.get("side") or "").upper()
+                            px = float(it.get("execPrice") or 0)
+                            q = float(it.get("execQty") or 0)
+                            fee = float(it.get("execFee") or 0)
+                            is_maker = bool(it.get("isMaker"))
+                            link = it.get("orderLinkId")
+                            # mid ref unknown here; pass None
+                            if sym:
+                                try:
+                                    ledger.on_execution(symbol=sym, side=side, price=px, qty=q, fee_usdt=fee, is_maker=is_maker, order_link_id=link, mid_ref=None)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            continue
+                elif topic.startswith("order"):
+                    items = data if isinstance(data, list) else data.get("list") or []
+                    for it in items:
+                        try:
+                            sym = it.get("symbol")
+                            st = str(it.get("orderStatus") or "")
+                            if st.lower() == "cancelled" and sym:
+                                try:
+                                    ledger.on_order_canceled(sym)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            continue
+                # Always keep raw log for debugging
+                slog.log_info(ts=now_ts, symbol=None, tag="ws", payload=msg)
+            except Exception:
+                slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="ws_err", payload={"raw": str(msg)[:200]})
 
         def _on_ws_err(err: Exception) -> None:
             logger.warning(f"WS error: {err}")
 
-        try:
-            ws = BybitPrivateWS(on_message=_on_ws_msg, on_error=_on_ws_err)
+            try:
+                ws = BybitPrivateWS(on_message=_on_ws_msg, on_error=_on_ws_err)
             ws.start()
             logger.info("Private WS started (order/execution/position)")
         except Exception as e:  # noqa: BLE001
@@ -1023,6 +1061,10 @@ def main() -> None:
                 entry_slippage_pct=0.0,
                 entry_mid_ref=mid,
             )
+            try:
+                ledger.on_order_submitted(symbol, plan.order_link_id, for_entry=True)
+            except Exception:
+                pass
             # Estimate entry fee for later PnL calculations
             po = prefer_limit and _env_bool("MAKER_POST_ONLY", True)
             is_maker_entry = (plan.order_type == "Limit") and po
