@@ -250,7 +250,56 @@ def main() -> None:
     slog = StructLogger(logs_dir, run_id)
     ledger = TradeLedger(run_id=run_id, out_dir=Path("reports"))
     require_env_flags(logger)
-    # Load profile config if requested
+    # Load YAML (single source) and export key params into ENV with precedence: YAML > ENV > Defaults
+    runtime = load_runtime()
+    def _export_resolved_from_yaml() -> None:
+        resolved: dict[str, str | float | int | bool] = {}
+        warnings: list[dict] = []
+        # Map selected keys
+        try:
+            ee = runtime.params.entry_exit
+            ob = runtime.params.orderbook
+            fu = runtime.params.funding_time
+            ex = runtime.app.exchange
+            uv = runtime.params.universe
+            mapping: list[tuple[str, object]] = [
+                ("TP_PCT", ee.tp1),
+                ("SL_PCT", ee.sl),
+                ("TRAIL_AFTER_TP1_PCT", ee.trail_after_tp1),
+                ("MIN_DEPTH_USD", ob.min_depth_usd),
+                ("AVOID_TAKER_WITHIN_MIN", fu.avoid_taker_within_min),
+                ("PREFER_LIMIT_DEFAULT", bool(ex.maker_post_only)),
+                ("DYNAMIC_TAKER_ON_STRONG", bool(ex.taker_on_strong_score)),
+                ("FALLBACK_IOC", bool(ex.fallback_ioc)),
+                ("UNIVERSE_TOP_N", uv.topN),
+                ("BYBIT_CATEGORY", ex.category),
+            ]
+            for key, yval in mapping:
+                ystr = str(yval).lower() if isinstance(yval, bool) else str(yval)
+                prev = os.environ.get(key)
+                if prev is not None and prev != ystr:
+                    warnings.append({"key": key, "env": prev, "yaml": ystr})
+                os.environ[key] = ystr
+                resolved[key] = yval
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"config:resolved export failed: {e}")
+        if warnings:
+            logger.warning(f"config:resolved conflicts: {warnings}")
+            try:
+                from bot.utils.structlog import BaseEvent
+                # emit conflict event
+                for w in warnings:
+                    slog.log_info(ts=int(time.time()*1000), symbol=None, tag="config:conflict", payload=w)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        # Dump resolved
+        try:
+            slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="config:resolved", payload=resolved)  # type: ignore[arg-type]
+        except Exception:
+            logger.info(f"config:resolved {resolved}")
+
+    _export_resolved_from_yaml()
+    # Load profile config if requested (overrides after base YAML export)
     if args.profile:
         try:
             if args.profile == "quick-test":
