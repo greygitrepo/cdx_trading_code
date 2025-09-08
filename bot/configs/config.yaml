@@ -24,6 +24,7 @@ params:
   universe:
     topN: 12
     spread_max_mult: 1.4           # 1.5 → 1.4 (스프레드 관리 강화)
+    spread_threshold_pct: 0.0004    # 레짐 스프레드 임계(미드 대비 비율)
     depth_drop_pause: 0.70
     vwap_dev_for_vrs: 0.0035
   regime:

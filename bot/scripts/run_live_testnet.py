@@ -319,9 +319,9 @@ def main() -> None:
 
     client = BybitV5Client()
     symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
-    category = os.environ.get("BYBIT_CATEGORY", "linear")
-    # Load YAML once for OB-Flow thresholds
+    # Load YAML once
     runtime = load_runtime()
+    category = str(getattr(runtime.app.exchange, 'category', 'linear'))
     ob_cfg = OBFlowConfig.from_params(runtime.params)
     ee = runtime.params.entry_exit
     obp = runtime.params.orderbook
@@ -420,8 +420,8 @@ def main() -> None:
     fee_assume_entry = os.environ.get("FEE_ASSUME_ENTRY", "auto").lower()  # auto|maker|taker
     fee_assume_exit = os.environ.get("FEE_ASSUME_EXIT", "taker").lower()   # maker|taker
     # Regime/signal thresholds (YAML)
-    spread_threshold = _env_float("MIS_SPREAD_THRESHOLD", 0.0004)  # legacy; can be moved into YAML later
-    spread_pause_mult = _env_float("SPREAD_PAUSE_MULT", 3.0)
+    spread_threshold = float(getattr(runtime.params.universe, 'spread_threshold_pct', 0.0004))
+    spread_pause_mult = float(getattr(runtime.params.regime, 'spread_mult_pause', 3.0))
     min_depth_usd = float(getattr(obp, "min_depth_usd", 5000.0))
 
     # 1) API key validation
@@ -1045,7 +1045,7 @@ def main() -> None:
                 elif fee_assume_entry == "taker":
                     fe_bps = taker_fee_bps
                 else:
-                    po = prefer_limit and _env_bool("MAKER_POST_ONLY", True)
+                    po = prefer_limit and bool(getattr(runtime.app.exchange, 'maker_post_only', True))
                     fe_bps = maker_fee_bps if ((plan.order_type == "Limit") and po) else taker_fee_bps
                 fx_bps = taker_fee_bps if fee_assume_exit != "maker" else maker_fee_bps
                 base_px = float(plan.price if plan.price is not None else mid)

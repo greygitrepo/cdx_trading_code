@@ -125,6 +125,8 @@ class UniverseParams(BaseModel):
     spread_max_mult: float = 1.5
     depth_drop_pause: float = 0.70
     vwap_dev_for_vrs: float = 0.0035
+    # Global spread threshold (pct of mid) used in regime pause check
+    spread_threshold_pct: float = 0.0004
 
 
 class ParamsPack(BaseModel):
