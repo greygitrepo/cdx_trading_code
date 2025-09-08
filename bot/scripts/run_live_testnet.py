@@ -46,6 +46,7 @@ try:
     from bot.core.signals.obflow import decide as obflow_decide, OBFlowConfig
     from bot.core.config import load_runtime
     from bot.core.rotation import build_universe, ExitFlag
+    from bot.core.ledger import TradeLedger
     from bot.utils.structlog import StructLogger, init_run_dir
 except Exception:  # pragma: no cover - fallback for direct script runs
     _ROOT = _P(__file__).resolve().parents[2]
@@ -247,6 +248,7 @@ def main() -> None:
     if n_loaded:
         logger.info(f"Loaded {n_loaded} vars from .env")
     slog = StructLogger(logs_dir, run_id)
+    ledger = TradeLedger(run_id=run_id, out_dir=Path("reports"))
     require_env_flags(logger)
     # Load profile config if requested
     if args.profile:
@@ -821,7 +823,26 @@ def main() -> None:
         except Exception:
             pass
 
-        prefer_limit = spread <= 0.0005 and _env_bool("PREFER_LIMIT_DEFAULT", True)
+        # Dynamic routing: default maker(PostOnly) unless strong signal suggests taker
+        prefer_limit = _env_bool("PREFER_LIMIT_DEFAULT", True)
+        dyn_taker = os.environ.get("DYNAMIC_TAKER_ON_STRONG", "true").strip().lower() == "true"
+        if dyn_taker:
+            met = []
+            # Simple proxies
+            tps_min = _env_float("DYN_TAKER_TPS_MIN", 8.0)
+            imb_min = _env_float("DYN_TAKER_IMB_L5_MIN", 0.25)
+            spr_max = _env_float("DYN_TAKER_SPREAD_MAX", 0.0006)
+            if vols.list() and len(vols.list()) >= 2:
+                tps = max(0.0, (vols.list()[-1] - vols.list()[-2]))  # crude proxy
+                if tps >= tps_min:
+                    met.append("tps")
+            if abs(obi) >= imb_min:
+                met.append("imb")
+            if spread <= spr_max:
+                met.append("spr")
+            if len(met) >= 2:
+                prefer_limit = False
+                logger.info(f"Routing=taker by strong-signal ({','.join(met)})")
         # Avoid taker near funding if configured and nextFundingTime is close
         try:
             avoid_min = _env_float("AVOID_TAKER_WITHIN_MIN", 5.0)
@@ -988,6 +1009,19 @@ def main() -> None:
             )
             logger.info("Order placed")
             traded = True
+            # Trade ledger: entry record (best-effort)
+            ledger.on_entry(
+                symbol=symbol,
+                side_long=(plan.side.upper() == "BUY"),
+                entry_ts=int(time.time() * 1000),
+                price=entry_px,
+                qty=float(plan.qty),
+                spread_pct=spread,
+                imbalance_L5=obi,
+                entry_liquidity=("maker" if (plan.order_type == "Limit" and po) else "taker"),
+                entry_fee_usdt=entry_fee,
+                entry_slippage_pct=0.0,
+            )
             # Estimate entry fee for later PnL calculations
             po = prefer_limit and _env_bool("MAKER_POST_ONLY", True)
             is_maker_entry = (plan.order_type == "Limit") and po
@@ -1145,6 +1179,11 @@ def main() -> None:
                                     logger.warning(f"Partial close failed: {e}")
                     except Exception:
                         pass
+                # Update MFE/MAE tracking while position open
+                try:
+                    ledger.update_mfe_mae(symbol, now_price=mid)
+                except Exception:
+                    pass
                 # Simple trailing: if price moved favorably by trail_after_tp1, set trailingStop
                 trail_after = _env_float("TRAIL_AFTER_TP1_PCT", 0.0008)
                 tp_pct = _env_float("TP_PCT", 0.0010)
@@ -1214,12 +1253,48 @@ def main() -> None:
                             logger.info(
                                 f"Time stop triggered after {held_sec}s; closing position"
                             )
-                            slog.log_pnl(
-                                ts=int(time.time() * 1000),
-                                symbol=symbol,
-                                realized=0.0,
-                                unrealized=None,
-                            )
+                            try:
+                                # Attempt to fetch recent executions to compute realized PnL and fees
+                                end_ms = int(time.time() * 1000)
+                                start_ms = end_ms - 15 * 60 * 1000
+                                ex = client.get_executions(symbol=symbol, category=category, start=start_ms, end=end_ms, limit=200)
+                                fills = (ex.get("result", {}) or {}).get("list", [])
+                                entry_fee = 0.0
+                                exit_fee = 0.0
+                                realized = 0.0
+                                # Best-effort aggregation by side
+                                for it in fills:
+                                    try:
+                                        qty_f = float(it.get("execQty") or 0)
+                                        price_f = float(it.get("execPrice") or 0)
+                                        fee_f = float(it.get("execFee") or 0)
+                                        is_maker = bool(it.get("isMaker"))
+                                        side_f = str(it.get("side") or "").upper()
+                                        if side_f in {"BUY", "SELL"}:
+                                            # Approx: use sign to compute PnL delta if both legs present
+                                            realized += (price_f - avg_price) * qty_f if side_long and side_f == "SELL" else 0.0
+                                            realized += (avg_price - price_f) * qty_f if (not side_long) and side_f == "BUY" else 0.0
+                                        # Split fees roughly
+                                        if side_f == ("BUY" if side_long else "SELL"):
+                                            entry_fee += fee_f
+                                        else:
+                                            exit_fee += fee_f
+                                    except Exception:
+                                        continue
+                                total_fee = entry_fee + exit_fee
+                                ledger.on_exit(
+                                    symbol=symbol,
+                                    exit_ts=end_ms,
+                                    price=mid,
+                                    qty=size,
+                                    reason="TIME_STOP",
+                                    exit_liquidity="taker",
+                                    exit_fee_usdt=exit_fee,
+                                    exit_slippage_pct=0.0,
+                                    realized_pnl_usdt=realized - total_fee,
+                                )
+                            except Exception:
+                                pass
                         except BybitAPIError as e:
                             logger.warning(f"Time stop close failed: {e}")
         except BybitAPIError as e:

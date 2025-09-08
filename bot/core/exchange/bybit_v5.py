@@ -283,6 +283,32 @@ class BybitV5Client:
         params = {"category": category or self.default_category, "symbol": symbol}
         return self._request("GET", "/v5/account/fee-rate", params=params, auth=True)
 
+    def get_executions(
+        self,
+        *,
+        symbol: Optional[str] = None,
+        category: Optional[str] = None,
+        start: Optional[int] = None,
+        end: Optional[int] = None,
+        limit: Optional[int] = None,
+        orderId: Optional[str] = None,
+        orderLinkId: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List recent executions (fills). Supports filtering by symbol/time/order.
+
+        Note: Bybit returns paginated results; for simplicity we expose a single-call fetch.
+        """
+        params: Dict[str, Any] = {
+            "category": category or self.default_category,
+            "symbol": symbol,
+            "start": start,
+            "end": end,
+            "limit": limit,
+            "orderId": orderId,
+            "orderLinkId": orderLinkId,
+        }
+        return self._request("GET", "/v5/execution/list", params=params, auth=True)
+
     # -------- Private trading/account endpoints --------
     def place_order(
         self,
