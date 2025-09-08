@@ -42,6 +42,7 @@ class RiskConfig(BaseModel):
     """Risk limits and sizing."""
 
     max_leverage: int = 10
+    max_alloc_pct: float = 0.02
     risk_per_trade_min: float = 0.003
     risk_per_trade_max: float = 0.006
     daily_max_loss: float = 0.02
@@ -50,6 +51,7 @@ class RiskConfig(BaseModel):
     max_symbols: int = 5
     total_budget_usdt: float | None = None
     use_balance_ratio: float = 1.0
+    min_free_balance_usdt: float = 100.0
 
 
 class RegimeParams(BaseModel):
@@ -60,6 +62,7 @@ class RegimeParams(BaseModel):
     resume_spread_mult: float = 1.3
     resume_depth_recover: float = 0.80
     oi_drop_pct: float = 2.0
+    strictness: Literal["off", "loose", "strict"] = "strict"
 
 
 class IndicatorParams(BaseModel):

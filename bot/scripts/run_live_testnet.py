@@ -412,15 +412,15 @@ def main() -> None:
 
         return floor(mult) * tick
 
-    leverage = _env_float("LEVERAGE", _env_float("LEVERAGE_DEFAULT", 10.0))
+    leverage = float(getattr(runtime.app.risk, 'max_leverage', 10))
     enable_ws = _env_bool("ENABLE_PRIVATE_WS", False)
     # Fee rates (bps); will try API first, then fallback to env/defaults
     maker_fee_bps = 2.0
     taker_fee_bps = 5.5
     fee_assume_entry = os.environ.get("FEE_ASSUME_ENTRY", "auto").lower()  # auto|maker|taker
     fee_assume_exit = os.environ.get("FEE_ASSUME_EXIT", "taker").lower()   # maker|taker
-    # Regime/signal thresholds
-    spread_threshold = _env_float("MIS_SPREAD_THRESHOLD", 0.0004)
+    # Regime/signal thresholds (YAML)
+    spread_threshold = _env_float("MIS_SPREAD_THRESHOLD", 0.0004)  # legacy; can be moved into YAML later
     spread_pause_mult = _env_float("SPREAD_PAUSE_MULT", 3.0)
     min_depth_usd = float(getattr(obp, "min_depth_usd", 5000.0))
 
@@ -723,7 +723,7 @@ def main() -> None:
         )
 
         # Regime pause checks (liquidity/spread) with strictness factor
-        strict = os.environ.get("REGIME_STRICTNESS", "strict").lower()
+        strict = str(getattr(runtime.params.regime, 'strictness', 'strict')).lower()
         factor = 1.0
         if strict == "off":
             factor = 10.0
@@ -997,8 +997,9 @@ def main() -> None:
         # Compare cap against effective notional (margin usage), not gross exposure
         notional_gross = plan.qty * mid
         eff_notional = notional_gross / max(leverage, 1e-9)
-        ok, reason = check_order_size(eff_notional, equity)
-        if not ok:
+        cap = float(getattr(runtime.app.risk, 'max_alloc_pct', 0.02)) * equity
+        if eff_notional > cap:
+            reason = f"Order notional {eff_notional:.2f} exceeds cap {cap:.2f} (max_alloc_pct)"
             logger.warning(f"Risk blocked (size): {reason} (gross={notional_gross:.2f}, lev={leverage})")
             slog.log_risk(
                 ts=int(time.time() * 1000),

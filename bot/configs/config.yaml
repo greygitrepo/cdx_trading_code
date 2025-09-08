@@ -9,11 +9,16 @@ exchange:
   fallback_ioc: true
 
 risk:
-  max_leverage: 7                  # 10 → 7
+  # 레버리지 상한(러너는 기본 레버리지로 사용)
+  max_leverage: 7                  # 기본 7배
+  # 1회 주문에 사용할 유효 노셔널 상한(Equity 대비 비율)
+  max_alloc_pct: 0.02              # 2%
   risk_per_trade_min: 0.002        # 0.2%
   risk_per_trade_max: 0.005        # 0.5%
   daily_max_loss: 0.015            # 2% → 1.5% 데일리 컷
   per_symbol_concentration: 0.30   # 40% → 30%
+  # 자유 잔고 하한(이 값 미만이면 신규 진입 차단)
+  min_free_balance_usdt: 100
 
 params:
   universe:
@@ -29,6 +34,8 @@ params:
     resume_spread_mult: 1.3
     resume_depth_recover: 0.80
     oi_drop_pct: 2.0
+    # 레짐 엄격도: strict|loose|off (완화 비율에 영향)
+    strictness: strict
   indicators:
     ema_fast: 3
     ema_slow: 9
