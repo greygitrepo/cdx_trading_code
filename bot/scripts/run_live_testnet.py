@@ -546,6 +546,11 @@ def main() -> None:
     ws = None
     if enable_ws and BybitPrivateWS is not None:
 
+        # Exit hint cache per symbol from execution/order topics
+        exit_hint: dict[str, str] = {}
+        last_summary_ms = int(time.time() * 1000)
+        SUMMARY_INTERVAL_MS = 10 * 60 * 1000  # 10 minutes
+
         def _on_ws_msg(msg: dict[str, Any]) -> None:
             # Minimal parse for execution/order topics to enrich ledger
             try:
@@ -563,6 +568,15 @@ def main() -> None:
                             fee = float(it.get("execFee") or 0)
                             is_maker = bool(it.get("isMaker"))
                             link = it.get("orderLinkId")
+                            otype = str(it.get("orderType") or "")
+                            stop_type = str(it.get("stopOrderType") or "")
+                            if otype.lower() == "takeprofit" or stop_type.lower() == "takeprofit":
+                                if sym:
+                                    exit_hint[sym] = "TP"
+                            elif otype.lower() == "stoploss" or stop_type.lower() == "stoploss":
+                                if sym:
+                                    # trailing vs plain SL 구분은 추후 세분화
+                                    exit_hint[sym] = "SL"
                             # mid ref unknown here; pass None
                             if sym:
                                 try:
@@ -582,8 +596,54 @@ def main() -> None:
                                     ledger.on_order_canceled(sym)
                                 except Exception:
                                     pass
+                            # Filled reduce-only order may imply manual/time-stop exit
+                            ro = bool(it.get("reduceOnly") is True)
+                            if st.lower() == "filled" and ro and sym:
+                                # 수동/타임스탑에 의한 종료 힌트
+                                exit_hint[sym] = exit_hint.get(sym, "MANUAL")
                         except Exception:
                             continue
+                elif topic.startswith("position"):
+                    items = data if isinstance(data, list) else data.get("list") or []
+                    for it in items:
+                        try:
+                            sym = it.get("symbol")
+                            sz = abs(float(it.get("size") or 0))
+                            if sym and sz == 0 and sym in ledger.active:
+                                # Finalize trade on position close
+                                rec = ledger.active.get(sym)
+                                if rec:
+                                    # avg exit price from accumulated executions if available
+                                    avg_exit = rec.exit_value_usdt / rec.exit_qty_filled if rec.exit_qty_filled > 0 else rec.exit_price or 0.0
+                                    if avg_exit <= 0:
+                                        avg_exit = float(it.get("avgPrice") or 0.0) or 0.0
+                                    # realized PnL approx
+                                    if rec.side == "LONG":
+                                        realized = (avg_exit - rec.entry_price) * rec.entry_qty - (rec.entry_fee_usdt + rec.exit_fee_usdt)
+                                    else:
+                                        realized = (rec.entry_price - avg_exit) * rec.entry_qty - (rec.entry_fee_usdt + rec.exit_fee_usdt)
+                                    reason = exit_hint.get(sym, rec.exit_reason or "MANUAL")
+                                    ledger.on_exit(
+                                        symbol=sym,
+                                        exit_ts=now_ts,
+                                        price=avg_exit or rec.exit_price,
+                                        qty=rec.entry_qty,
+                                        reason=reason,
+                                        exit_liquidity=rec.exit_liquidity,
+                                        exit_fee_usdt=rec.exit_fee_usdt,
+                                        exit_slippage_pct=rec.exit_slippage_pct,
+                                        realized_pnl_usdt=realized,
+                                        exit_mid_ref=None,
+                                    )
+                        except Exception:
+                            continue
+                # periodic summary flush
+                try:
+                    if now_ts - last_summary_ms >= SUMMARY_INTERVAL_MS:
+                        ledger.write_daily_summary()
+                        last_summary_ms = now_ts
+                except Exception:
+                    pass
                 # Always keep raw log for debugging
                 slog.log_info(ts=now_ts, symbol=None, tag="ws", payload=msg)
             except Exception:
@@ -1492,6 +1552,11 @@ def main() -> None:
     try:
         if enable_ws and "ws" in locals() and ws is not None:
             ws.stop()
+    except Exception:
+        pass
+    # Final summary flush
+    try:
+        ledger.write_daily_summary()
     except Exception:
         pass
 
