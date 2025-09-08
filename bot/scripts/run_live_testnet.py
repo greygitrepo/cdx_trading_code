@@ -502,6 +502,28 @@ def main() -> None:
     blacklist: dict[str, int] = {}
 
     while not exit_flag.check():
+        # Optionally refresh universe each loop to keep symbols up-to-date
+        try:
+            if os.environ.get("REFRESH_UNIVERSE_EACH_LOOP", "true").strip().lower() == "true":
+                uni_new = build_universe(client)
+                # Exclude symbols with open positions best-effort
+                try:
+                    pos_all = client.get_positions(category=category, settleCoin="USDT")
+                    plist = pos_all.get("result", {}).get("list", [])
+                    open_syms = {
+                        str(p.get("symbol"))
+                        for p in plist
+                        if p.get("symbol") and abs(float(p.get("size") or 0)) > 0
+                    }
+                except Exception:
+                    open_syms = set()
+                symbols_ref = [s for s in uni_new.symbols if s not in open_syms] or uni_new.symbols
+                if symbols_ref:
+                    from bot.core.rotation import Universe as _U
+                    uni = _U(symbols=symbols_ref, discovered=uni_new.discovered)
+        except Exception:
+            pass
+
         symbol = uni.symbols[idx % max(1, len(uni.symbols))]
         # Skip blacklisted symbols until expiry
         now_s = int(time.time())
@@ -659,7 +681,25 @@ def main() -> None:
                 # Also skip if there are open opening orders (best-effort)
                 try:
                     oo = client.get_open_orders(symbol=symbol)
-                    olist = oo.get("result", {}).get("list", [])
+                    raw_list = oo.get("result", {}).get("list", []) or []
+                    # Consider only truly opening orders:
+                    # - reduceOnly != True (we allow reduce-only orders to coexist)
+                    # - orderStatus in open states (New/PartiallyFilled/Untriggered)
+                    open_states = {"New", "PartiallyFilled", "Untriggered"}
+                    olist = []
+                    for it in raw_list:
+                        try:
+                            ro = it.get("reduceOnly") is True
+                            st = str(it.get("orderStatus") or "").strip()
+                            if ro:
+                                continue
+                            if st and st not in open_states:
+                                continue
+                            olist.append(it)
+                        except Exception:
+                            continue
+                    if os.environ.get("DEBUG_OPEN_ORDERS", "false").lower() == "true":
+                        logger.info(f"OpenOrders(raw={len(raw_list)} filtered={len(olist)}): sample={olist[0] if olist else None}")
                     if olist:
                         logger.info("Skip: open orders present for symbol (avoid duplicate)")
                         slog.log_why_no_trade(
