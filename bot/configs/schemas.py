@@ -162,6 +162,18 @@ class RuntimeOptions(BaseModel):
     strategy: Literal["pack", "obflow"] = Field(
         "pack", description="Select execution strategy: pack (MIS/VRS/LSR) or obflow"
     )
+    # Discovery/rotation
+    discover_symbols: bool = True
+    consensus_ticks: int = 3
+    no_trade_sleep_sec: float = 5.0
+    loop_idle_sec: float = 1.0
+    exit_key: str = "q"
+    refresh_universe_each_loop: bool = True
+    # Behavior toggles
+    avoid_duplicate_symbol: bool = True
+    allow_flip: bool = False
+    invert_signals: bool = False
+    attach_tpsl_on_create: bool = False
 
 
 try:

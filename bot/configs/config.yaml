@@ -96,4 +96,17 @@ params:
 
 # Runtime toggles (runner)
 runtime:
-  strategy: pack   # pack=MIS/VRS/LSR, obflow=OB-Flow
+  # 전략 선택: pack=MIS/VRS/LSR, obflow=OB-Flow
+  strategy: pack
+  # 디스커버리/회전
+  discover_symbols: true           # 디스커버리 사용 여부
+  consensus_ticks: 3               # 진입 전 관찰 틱 수
+  no_trade_sleep_sec: 5.0          # 미진입 시 대기
+  loop_idle_sec: 1.0               # 회전 간 간격
+  exit_key: "q"                    # 종료 키
+  refresh_universe_each_loop: true # 매 루프 유니버스 갱신
+  # 동작 토글
+  avoid_duplicate_symbol: true     # 보유/오픈오더 종목 스킵
+  allow_flip: false                # 보유 중 반대 신호 즉시 플립 허용
+  invert_signals: false            # 신호 반전(BUY↔SELL)
+  attach_tpsl_on_create: false     # 주문 생성 시 TP/SL 부착

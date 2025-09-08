@@ -495,8 +495,8 @@ def main() -> None:
         maker_fee_bps = _env_float("MAKER_FEE_BPS", maker_fee_bps)
         taker_fee_bps = _env_float("TAKER_FEE_BPS", taker_fee_bps)
 
-    # Build symbol universe
-    uni = build_universe(client)
+    # Build symbol universe (YAML)
+    uni = build_universe(client, topN=runtime.params.universe.topN, discover=bool(getattr(runtime.app.runtime, 'discover_symbols', True)))
     # Exclude symbols with open positions from search/rotation
     try:
         pos_all = client.get_positions(category=category, settleCoin="USDT")
@@ -584,11 +584,9 @@ def main() -> None:
             logger.warning(f"Private WS failed to start: {e}")
 
     # Rotation loop config
-    loop_interval = _env_float(
-        "NO_TRADE_SLEEP_SEC", _env_float("LOOP_INTERVAL_SEC", 5.0)
-    )
-    consensus_ticks = _env_int("CONSENSUS_TICKS", 3)
-    loop_idle = _env_float("LOOP_IDLE_SEC", 1.0)
+    loop_interval = float(getattr(runtime.app.runtime, 'no_trade_sleep_sec', 5.0))
+    consensus_ticks = int(getattr(runtime.app.runtime, 'consensus_ticks', 3))
+    loop_idle = float(getattr(runtime.app.runtime, 'loop_idle_sec', 1.0))
     fixed_notional = _env_float("ORDER_SIZE_USDT", 0.0)
     exit_flag = ExitFlag()
     idx = 0
@@ -597,8 +595,8 @@ def main() -> None:
     while not exit_flag.check():
         # Optionally refresh universe each loop to keep symbols up-to-date
         try:
-            if os.environ.get("REFRESH_UNIVERSE_EACH_LOOP", "true").strip().lower() == "true":
-                uni_new = build_universe(client)
+            if bool(getattr(runtime.app.runtime, 'refresh_universe_each_loop', True)):
+                uni_new = build_universe(client, topN=runtime.params.universe.topN, discover=bool(getattr(runtime.app.runtime, 'discover_symbols', True)))
                 # Exclude symbols with open positions best-effort
                 try:
                     pos_all = client.get_positions(category=category, settleCoin="USDT")

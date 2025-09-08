@@ -59,7 +59,7 @@ def build_universe(client: BybitV5Client, *, topN: int | None = None, discover: 
     # Allow profile-level control via PROFILE env (quick-test disables discovery by default)
     prof = _env_str("PROFILE", "").lower()
     discover_default = False if prof == "quick-test" else True
-    if _env_bool("DISCOVER_SYMBOLS", discover_default) if discover is None else discover:
+    if (discover if discover is not None else _env_bool("DISCOVER_SYMBOLS", discover_default)):
         cat = _env_str("CATEGORY", _env_str("BYBIT_CATEGORY", "linear"))
         topn = topN if topN is not None else _env_int("UNIVERSE_TOP_N", 10)
         try:
