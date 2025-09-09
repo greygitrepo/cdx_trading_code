@@ -499,45 +499,49 @@ def main() -> None:
     spread_pause_mult = float(getattr(runtime.params.regime, 'spread_mult_pause', 3.0))
     min_depth_usd = float(getattr(obp, "min_depth_usd", 5000.0))
 
-    # 1) API key validation
-    try:
-        account_type = os.environ.get("ACCOUNT_TYPE", "UNIFIED").upper()
-        logger.info(
-            f"Bybit base={client.base_url} category={category} accountType={account_type}"
-        )
-        wb = client.get_wallet_balance(accountType=account_type, coin="USDT")
-        logger.info("Wallet balance call OK: retCode=0")
-        slog.log_info(
-            ts=int(time.time() * 1000),
-            symbol=None,
-            tag="wallet_balance",
-            payload=wb.get("result", {}),
-        )
-    except BybitAPIError as e:
-        # One-shot fallback for account type mismatch
-        if getattr(e, "ret_code", 0) in (401, 403):
-            alt = "CONTRACT" if account_type == "UNIFIED" else "UNIFIED"
-            try:
-                logger.warning(
-                    f"Wallet balance auth failed with {account_type}; retrying with {alt}"
-                )
-                wb = client.get_wallet_balance(accountType=alt, coin="USDT")
-                logger.info("Wallet balance call OK on fallback: retCode=0")
-                slog.log_info(
-                    ts=int(time.time() * 1000),
-                    symbol=None,
-                    tag="wallet_balance",
-                    payload=wb.get("result", {}),
-                )
-            except BybitAPIError as e2:
-                logger.error(f"Wallet balance failed: {e2}")
-                logger.error(
-                    "Auth failed (401/403). Check: TESTNET key pair, ACCOUNT_TYPE (UNIFIED vs CONTRACT), IP whitelist, and system time."
-                )
+    # 1) API key validation (skip on DRY_RUN or missing creds)
+    if dry_run or not getattr(client, "api_key", "") or not getattr(client, "api_secret", ""):
+        logger.info("DRY_RUN=true 또는 API 키 미설정: 지갑 인증 체크를 건너뜁니다.")
+        wb = {"result": {"list": []}}
+    else:
+        try:
+            account_type = os.environ.get("ACCOUNT_TYPE", "UNIFIED").upper()
+            logger.info(
+                f"Bybit base={client.base_url} category={category} accountType={account_type}"
+            )
+            wb = client.get_wallet_balance(accountType=account_type, coin="USDT")
+            logger.info("Wallet balance call OK: retCode=0")
+            slog.log_info(
+                ts=int(time.time() * 1000),
+                symbol=None,
+                tag="wallet_balance",
+                payload=wb.get("result", {}),
+            )
+        except BybitAPIError as e:
+            # One-shot fallback for account type mismatch
+            if getattr(e, "ret_code", 0) in (401, 403):
+                alt = "CONTRACT" if account_type == "UNIFIED" else "UNIFIED"
+                try:
+                    logger.warning(
+                        f"Wallet balance auth failed with {account_type}; retrying with {alt}"
+                    )
+                    wb = client.get_wallet_balance(accountType=alt, coin="USDT")
+                    logger.info("Wallet balance call OK on fallback: retCode=0")
+                    slog.log_info(
+                        ts=int(time.time() * 1000),
+                        symbol=None,
+                        tag="wallet_balance",
+                        payload=wb.get("result", {}),
+                    )
+                except BybitAPIError as e2:
+                    logger.error(f"Wallet balance failed: {e2}")
+                    logger.error(
+                        "Auth failed (401/403). Check: TESTNET key pair, ACCOUNT_TYPE (UNIFIED vs CONTRACT), IP whitelist, and system time."
+                    )
+                    sys.exit(2)
+            else:
+                logger.error(f"Wallet balance failed: {e}")
                 sys.exit(2)
-        else:
-            logger.error(f"Wallet balance failed: {e}")
-            sys.exit(2)
 
     # Extract equity and free balance (best effort)
     equity = 0.0
