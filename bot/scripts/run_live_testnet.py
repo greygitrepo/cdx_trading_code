@@ -81,6 +81,7 @@ except Exception:  # pragma: no cover - fallback for direct script runs
     from bot.core.order_router import OrderRouter
     from bot.core.market_data_hub import MarketDataHub
     from bot.actors.symbol_actor import SymbolActor
+    from bot.core.ledger import TradeLedger
 
 import yaml  # type: ignore
 
