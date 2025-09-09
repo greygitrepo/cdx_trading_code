@@ -307,7 +307,7 @@ def main() -> None:
     if n_loaded:
         logger.info(f"Loaded {n_loaded} vars from .env")
     slog = StructLogger(logs_dir, run_id)
-    ledger = TradeLedger(run_id=run_id, out_dir=Path("reports"))
+    ledger = TradeLedger(run_id=run_id, out_dir=_P("reports"))
     require_env_flags(logger)
     # Load YAML (single source) and export key params into ENV with precedence: YAML > ENV > Defaults
     runtime = load_runtime()
