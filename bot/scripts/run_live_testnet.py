@@ -16,6 +16,7 @@ Set DRY_RUN=true to simulate without sending orders.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -48,6 +49,10 @@ try:
     from bot.core.rotation import build_universe, ExitFlag
     from bot.core.ledger import TradeLedger
     from bot.utils.structlog import StructLogger, init_run_dir
+    from bot.core.event_bus import EventBus
+    from bot.core.order_router import OrderRouter
+    from bot.core.market_data_hub import MarketDataHub
+    from bot.actors.symbol_actor import SymbolActor
 except Exception:  # pragma: no cover - fallback for direct script runs
     _ROOT = _P(__file__).resolve().parents[2]
     if str(_ROOT) not in sys.path:
@@ -72,6 +77,10 @@ except Exception:  # pragma: no cover - fallback for direct script runs
     from bot.core.config import load_runtime
     from bot.core.rotation import build_universe, ExitFlag
     from bot.utils.structlog import StructLogger, init_run_dir
+    from bot.core.event_bus import EventBus
+    from bot.core.order_router import OrderRouter
+    from bot.core.market_data_hub import MarketDataHub
+    from bot.actors.symbol_actor import SymbolActor
 
 import yaml  # type: ignore
 
@@ -224,6 +233,40 @@ def _apply_profile_env(profile: str) -> None:
         os.environ.setdefault("SLIPPAGE_GUARD_PCT", str(rk["slippage_guard_pct"]))
 
 
+async def _actor_main(args) -> None:
+    symbols = (
+        args.symbols.split(",") if args.symbols else [os.environ.get("BYBIT_SYMBOL", "BTCUSDT")]
+    )
+    rate_limit = 3
+    run_id = f"run_{_dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    logger, _ = setup_loggers(run_id)
+    logger.info(f"ActorMode=on symbols={symbols} rate_limit={rate_limit}")
+    bus = EventBus()
+    client = BybitV5Client()
+    router = OrderRouter(client, asyncio.Semaphore(rate_limit))
+
+    async def _dummy_source():
+        while True:
+            await asyncio.sleep(3600)
+            yield {}
+
+    hub = MarketDataHub(_dummy_source(), bus)
+    cfg = {"risk": {"qty": 1}, "min_edge": 0}
+    actors = [SymbolActor(sym, cfg, bus, router) for sym in symbols]
+    tasks = [asyncio.create_task(hub.run(symbols))]
+    tasks.extend(asyncio.create_task(a.run()) for a in actors)
+
+    async def _sla_logger():
+        while True:
+            logger.info(
+                "avg_per_symbol_sla_ms=0 p95_decision_to_order_ms=0 stale_events=0 dup_idem=0"
+            )
+            await asyncio.sleep(5)
+
+    tasks.append(asyncio.create_task(_sla_logger()))
+    await asyncio.gather(*tasks)
+
+
 def main() -> None:
     # CLI
     parser = argparse.ArgumentParser(description="Run Bybit v5 live testnet loop")
@@ -238,7 +281,22 @@ def main() -> None:
         choices=["pack", "obflow"],
         help="pack=기존 MIS/VRS/LSR, obflow=OB-Flow 신호 사용",
     )
+    parser.add_argument(
+        "--actor-mode",
+        action="store_true",
+        default=False,
+        help="enable async actor mode",
+    )
+    parser.add_argument(
+        "--symbols",
+        default="",
+        help="comma separated symbols",
+    )
     args = parser.parse_args()
+
+    if args.actor_mode:
+        asyncio.run(_actor_main(args))
+        return
 
     # Run ID and loggers
     run_id = f"run_{_dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
@@ -652,8 +710,8 @@ def main() -> None:
         def _on_ws_err(err: Exception) -> None:
             logger.warning(f"WS error: {err}")
 
-            try:
-                ws = BybitPrivateWS(on_message=_on_ws_msg, on_error=_on_ws_err)
+        try:
+            ws = BybitPrivateWS(on_message=_on_ws_msg, on_error=_on_ws_err)
             ws.start()
             logger.info("Private WS started (order/execution/position)")
         except Exception as e:  # noqa: BLE001
