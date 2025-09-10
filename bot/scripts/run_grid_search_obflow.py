@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Tuple
-
+  
 # Ensure repo root on sys.path for direct execution
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
