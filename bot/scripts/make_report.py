@@ -75,6 +75,42 @@ def compute_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     return summary
 
 
+def maybe_read_trades(run_id: str) -> Dict[str, Any]:
+    """Optional augmentation from trades.jsonl if present."""
+    trades_fp = Path("logs") / run_id / "trades.jsonl"
+    if not trades_fp.exists():
+        return {}
+    wins = losses = 0
+    pnls: List[float] = []
+    hold: List[float] = []
+    try:
+        with trades_fp.open("r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                pnl = float(o.get("realized_pnl_usdt", 0.0) or 0.0)
+                pnls.append(pnl)
+                wins += 1 if pnl > 0 else 0
+                losses += 1 if pnl < 0 else 0
+                hold.append(float(o.get("hold_secs", 0.0) or 0.0))
+    except Exception:
+        return {}
+    trades_n = len(pnls)
+    if trades_n == 0:
+        return {}
+    win_rate = wins / trades_n if trades_n else 0.0
+    avg_pnl = sum(pnls) / trades_n if trades_n else 0.0
+    med_hold = sorted(hold)[len(hold)//2] if hold else 0.0
+    return {
+        "trades": trades_n,
+        "win_rate": round(win_rate, 4),
+        "avg_realized_pnl_usdt": round(avg_pnl, 6),
+        "median_hold_secs": med_hold,
+    }
+
+
 def write_html(out_fp: Path, run_id: str, summary: Dict[str, Any]) -> None:
     out_fp.parent.mkdir(parents=True, exist_ok=True)
     html = [
@@ -100,6 +136,7 @@ def main() -> None:
     events_fp = Path("logs") / run_id / "events.jsonl"
     events = load_events(events_fp)
     summary = compute_summary(events)
+    summary.update(maybe_read_trades(run_id))
     out_fp = Path("reports") / f"quick_test_{run_id}.html"
     write_html(out_fp, run_id, summary)
     print(str(out_fp))

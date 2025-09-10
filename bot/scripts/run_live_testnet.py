@@ -90,6 +90,14 @@ try:
 except Exception:  # noqa: BLE001
     BybitPrivateWS = None  # type: ignore
 
+# Reporting (optional trade ledger per-run)
+try:
+    from bot.core.reporting.writer import TradeLedgerWriter  # type: ignore # noqa: E402
+    from bot.core.reporting.ledger import TradeLedgerRow  # type: ignore # noqa: E402
+except Exception:
+    TradeLedgerWriter = None  # type: ignore
+    TradeLedgerRow = None  # type: ignore
+
 
 def setup_loggers(run_id: str) -> tuple[logging.Logger, _P]:
     base_logs = _P("logs")
@@ -308,6 +316,12 @@ def main() -> None:
         logger.info(f"Loaded {n_loaded} vars from .env")
     slog = StructLogger(logs_dir, run_id)
     ledger = TradeLedger(run_id=run_id, out_dir=_P("reports"))
+    # Optional per-trade ledger writer (CSV/JSONL under logs/run_<RUN_ID>)
+    tle_enabled = os.environ.get("TRADE_LEDGER_ENABLED", "true").strip().lower() == "true"
+    tle_formats = [s.strip() for s in os.environ.get("TRADE_LEDGER_FORMATS", "csv,jsonl").split(",") if s.strip()]
+    tl_writer = None
+    if tle_enabled and TradeLedgerWriter is not None:
+        tl_writer = TradeLedgerWriter(run_id, str(logs_dir))
     require_env_flags(logger)
     # Load YAML (single source) and export key params into ENV with precedence: YAML > ENV > Defaults
     runtime = load_runtime()
@@ -332,6 +346,8 @@ def main() -> None:
                 ("FALLBACK_IOC", bool(ex.fallback_ioc)),
                 ("UNIVERSE_TOP_N", uv.topN),
                 ("BYBIT_CATEGORY", ex.category),
+                # Keep REST base (testnet/mainnet) in sync with YAML network
+                ("TESTNET", "true" if str(getattr(ex, "network", "testnet")).lower() == "testnet" else "false"),
             ]
             for key, yval in mapping:
                 ystr = str(yval).lower() if isinstance(yval, bool) else str(yval)
@@ -358,7 +374,7 @@ def main() -> None:
             logger.info(f"config:resolved {resolved}")
 
     _export_resolved_from_yaml()
-    # Load profile config if requested (pure YAML overlay; no ENV mapping)
+    # Load profile config if requested (pure YAML overlay; then re-export to ENV)
     if args.profile:
         try:
             prof_name = "quick_test" if args.profile == "quick-test" else args.profile
@@ -382,6 +398,8 @@ def main() -> None:
                 if overlay.get("runtime"):
                     _merge_obj(runtime.app.runtime, overlay.get("runtime"))
                 logger.info(f"Applied profile overlay: {args.profile}")
+                # Re-export resolved values after overlay (keeps TESTNET/category in sync)
+                _export_resolved_from_yaml()
             else:
                 logger.warning(f"Profile not found: {prof_path}")
         except Exception as e:  # noqa: BLE001
@@ -498,6 +516,54 @@ def main() -> None:
     spread_threshold = float(getattr(runtime.params.universe, 'spread_threshold_pct', 0.0004))
     spread_pause_mult = float(getattr(runtime.params.regime, 'spread_mult_pause', 3.0))
     min_depth_usd = float(getattr(obp, "min_depth_usd", 5000.0))
+
+    # Helper: adapt internal TradeRecord -> reporting.TradeLedgerRow
+    def _build_row_from_rec(run_id_val, rec) -> TradeLedgerRow:  # type: ignore[valid-type]
+        def pct(x):
+            try:
+                return float(x) * 100.0
+            except Exception:
+                return 0.0
+        return TradeLedgerRow(
+            trade_id=f"{run_id_val}:{rec.symbol}:{rec.entry_time}",
+            run_id=run_id_val,
+            symbol=rec.symbol,
+            side=rec.side,  # LONG/SHORT
+            entry_time=int(rec.entry_time),
+            entry_price=float(rec.entry_price),
+            entry_qty=float(rec.entry_qty),
+            entry_value_usdt=float(rec.entry_value_usdt),
+            entry_liquidity=(rec.entry_liquidity if rec.entry_liquidity in ("maker", "taker") else None),
+            entry_fee_usdt=float(rec.entry_fee_usdt),
+            entry_slippage_pct=pct(rec.entry_slippage_pct),
+            exit_time=int(rec.exit_time or 0),
+            exit_price=float(rec.exit_price or 0.0),
+            exit_qty=float(rec.exit_qty or 0.0),
+            exit_value_usdt=float(rec.exit_value_usdt or 0.0),
+            exit_liquidity=(rec.exit_liquidity if rec.exit_liquidity in ("maker", "taker") else None),
+            exit_fee_usdt=float(rec.exit_fee_usdt or 0.0),
+            exit_slippage_pct=pct(rec.exit_slippage_pct or 0.0),
+            exit_reason=str(rec.exit_reason or "MANUAL"),
+            hold_secs=float(rec.hold_secs or 0),
+            realized_pnl_usdt=float(rec.realized_pnl_usdt),
+            realized_pnl_pct_on_value=pct(rec.realized_pnl_usdt / rec.entry_value_usdt) if (rec.entry_value_usdt or 0) != 0 else 0.0,
+            max_favorable_excursion_pct=pct(rec.max_favorable_excursion_pct),
+            max_adverse_excursion_pct=pct(rec.max_adverse_excursion_pct),
+            orders_submitted=int(rec.orders_submitted),
+            orders_filled=int(rec.orders_filled),
+            orders_canceled=int(rec.orders_canceled),
+            spread_pct_at_entry=pct(rec.spread_pct_at_entry or 0.0),
+            depth_L5_bid_usd=float(rec.depth_L5_bid_usd or 0.0),
+            depth_L5_ask_usd=float(rec.depth_L5_ask_usd or 0.0),
+            imbalance_L5=float(rec.imbalance_L5 or 0.0),
+            tps_entry=float(rec.tps_entry or 0.0),
+            volatility_1m_pct=float(rec.volatility_1m_pct or 0.0),
+            volatility_5m_pct=float(rec.volatility_5m_pct or 0.0),
+            funding_min_to_next=(float(rec.funding_min_to_next) if rec.funding_min_to_next is not None else None),
+            trail_armed_at_price=(float(rec.trail_armed_at_price) if rec.trail_armed_at_price is not None else None),
+            trail_steps=int(rec.trail_steps) if getattr(rec, "trail_steps", None) is not None else None,
+            max_trail_offset_pct=(pct(rec.max_trail_offset_pct) if getattr(rec, "max_trail_offset_pct", None) is not None else None),
+        )
 
     # 1) API key validation (skip on DRY_RUN or missing creds)
     if dry_run or not getattr(client, "api_key", "") or not getattr(client, "api_secret", ""):
@@ -686,7 +752,7 @@ def main() -> None:
                                     else:
                                         realized = (rec.entry_price - avg_exit) * rec.entry_qty - (rec.entry_fee_usdt + rec.exit_fee_usdt)
                                     reason = exit_hint.get(sym, rec.exit_reason or "MANUAL")
-                                    ledger.on_exit(
+                                    rec_done = ledger.on_exit(
                                         symbol=sym,
                                         exit_ts=now_ts,
                                         price=avg_exit or rec.exit_price,
@@ -698,6 +764,13 @@ def main() -> None:
                                         realized_pnl_usdt=realized,
                                         exit_mid_ref=None,
                                     )
+                                    # Emit per-trade ledger row if enabled
+                                    try:
+                                        if tl_writer and rec_done and TradeLedgerRow is not None:
+                                            row = _build_row_from_rec(run_id, rec_done)
+                                            tl_writer.append(row, formats=tle_formats)
+                                    except Exception:
+                                        pass
                         except Exception:
                             continue
                 # periodic summary flush
@@ -1557,7 +1630,7 @@ def main() -> None:
                                             reason = "TRAIL"
                                 except Exception:
                                     pass
-                                ledger.on_exit(
+                                rec_done = ledger.on_exit(
                                     symbol=symbol,
                                     exit_ts=end_ms,
                                     price=mid,
@@ -1569,6 +1642,12 @@ def main() -> None:
                                     realized_pnl_usdt=realized - total_fee,
                                     exit_mid_ref=mid,
                                 )
+                                try:
+                                    if tl_writer and rec_done and TradeLedgerRow is not None:
+                                        row = _build_row_from_rec(run_id, rec_done)
+                                        tl_writer.append(row, formats=tle_formats)
+                                except Exception:
+                                    pass
                                 try:
                                     ledger.write_daily_summary()
                                 except Exception:
