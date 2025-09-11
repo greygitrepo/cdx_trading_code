@@ -74,17 +74,24 @@ class LiveTestnetOrchestrator:
             fu = runtime.params.funding_time
             ex = runtime.app.exchange
             uv = runtime.params.universe
+            # 안전한 값 추출(필드 누락 대비)
+            tp1 = getattr(ee, "tp1", 0.0012)
+            trail_after_tp1 = getattr(ee, "trail_after_tp1", 0.0008)
+            try:
+                sl_pct_default = float(os.environ.get("SL_PCT", 0.0020))
+            except Exception:
+                sl_pct_default = 0.0020
             mapping: list[tuple[str, object]] = [
-                ("TP_PCT", ee.tp1),
-                ("SL_PCT", ee.sl),
-                ("TRAIL_AFTER_TP1_PCT", ee.trail_after_tp1),
-                ("MIN_DEPTH_USD", ob.min_depth_usd),
-                ("AVOID_TAKER_WITHIN_MIN", fu.avoid_taker_within_min),
-                ("PREFER_LIMIT_DEFAULT", bool(ex.maker_post_only)),
-                ("DYNAMIC_TAKER_ON_STRONG", bool(ex.taker_on_strong_score)),
-                ("FALLBACK_IOC", bool(ex.fallback_ioc)),
-                ("UNIVERSE_TOP_N", uv.topN),
-                ("BYBIT_CATEGORY", ex.category),
+                ("TP_PCT", tp1),
+                ("SL_PCT", getattr(ee, "sl", sl_pct_default)),
+                ("TRAIL_AFTER_TP1_PCT", trail_after_tp1),
+                ("MIN_DEPTH_USD", getattr(ob, "min_depth_usd", 50000)),
+                ("AVOID_TAKER_WITHIN_MIN", getattr(fu, "avoid_taker_within_min", 5)),
+                ("PREFER_LIMIT_DEFAULT", bool(getattr(ex, "maker_post_only", True))),
+                ("DYNAMIC_TAKER_ON_STRONG", bool(getattr(ex, "taker_on_strong_score", True))),
+                ("FALLBACK_IOC", bool(getattr(ex, "fallback_ioc", True))),
+                ("UNIVERSE_TOP_N", getattr(uv, "topN", 12)),
+                ("BYBIT_CATEGORY", getattr(ex, "category", "linear")),
                 ("TESTNET", "true" if str(getattr(ex, "network", "testnet")).lower() == "testnet" else "false"),
             ]
             for key, yval in mapping:
@@ -809,7 +816,7 @@ class LiveTestnetRunner:
         while not exit_flag.check():
             try:
                 if bool(getattr(runtime.app.runtime, 'refresh_universe_each_loop', True)):
-                    uni = LiveTestnetOrchestrator.refresh_universe(client, runtime, category, logger)
+                    uni = LiveTestnetRunner.refresh_universe(client, runtime, category, logger)
             except Exception:
                 pass
 
@@ -820,8 +827,8 @@ class LiveTestnetRunner:
                 continue
             idx += 1
 
-            flt = LiveTestnetOrchestrator.load_instrument_filters(client, category, symbol, logger)
-            LiveTestnetOrchestrator.set_leverage(client, symbol, leverage, category, logger)
+            flt = LiveTestnetRunner.load_instrument_filters(client, category, symbol, logger)
+            LiveTestnetRunner.set_leverage(client, symbol, leverage, category, logger)
 
             # Regime checks (spread pause)
             try:
@@ -832,7 +839,7 @@ class LiveTestnetRunner:
                 spr_pause_mult = 3.0
 
             ob_depth = _env_int("ORDERBOOK_DEPTH", 1)
-            ob_ctx = LiveTestnetOrchestrator.get_orderbook_context(
+            ob_ctx = LiveTestnetRunner.get_orderbook_context(
                 client, symbol=symbol, category=category, ob_depth=ob_depth, logger=logger, slog=slog
             )
             mid = ob_ctx["mid"]
