@@ -764,85 +764,26 @@ def main() -> None:
 
         # 3) Strategy selection
         if strategy == "obflow":
-            # OB-Flow는 L2Book 특징이 필요 — mid/spread/마이크로를 기반으로 하므로 여기서 간단히 재계산
-            from bot.core.book import L2Book
-            from bot.core.features import basic_snapshot
-            b = L2Book(symbol=symbol)
-            # L1만 알고 있으므로 현재 bid/ask를 한 레벨로 반영
-            b.bids[mid - spread / 2] = bid_sz or 1.0  # type: ignore[index]
-            b.asks[mid + spread / 2] = ask_sz or 1.0  # type: ignore[index]
-            feat = basic_snapshot(b)
-            sig = obflow_decide(b, ob_cfg)
-            if sig is None:
-                logger.info("OB-Flow: no signal; sleeping")
-                slog.log_signal(
-                    ts=int(time.time() * 1000), symbol=symbol, scores={"obflow": feat}, decision=None
-                )
+            signal, feat, sig = LiveTestnetOrchestrator.decide_obflow_signal(
+                symbol=symbol, mid=mid, spread=spread, bid_sz=bid_sz, ask_sz=ask_sz, obi=obi, ob_cfg=ob_cfg, logger=logger, slog=slog
+            )
+            if signal is None:
                 time.sleep(loop_interval)
                 continue
-            signal = +1 if str(sig["side"]).upper() == "BUY" else -1
-            # Invert signals if requested: BUY->short, SELL->long
-            try:
-                if os.environ.get("INVERT_SIGNALS", "false").strip().lower() == "true":
-                    signal *= -1
-                    logger.info("Signal inversion active: flipping OB-Flow direction")
-            except Exception:
-                pass
-            logger.info(f"OB-Flow selected: {sig['type']} -> {sig['side']}")
-            slog.log_signal(
-                ts=int(time.time() * 1000), symbol=symbol, scores={"obflow": feat}, decision=f"OBF:{sig['type']}:{sig['side']}"
-            )
         else:
-            sp = StrategyParams()
-            mis = mis_signal(
-                closes.list(),
-                orderbook_imbalance=(obi + 1) / 2,
+            signal, pack_scores = LiveTestnetOrchestrator.decide_pack_signal(
+                symbol=symbol,
+                closes=closes.list(),
+                vols=vols.list(),
+                obi=obi,
                 spread=spread,
                 spread_threshold=spread_threshold,
-                params=sp,
+                logger=logger,
+                slog=slog,
             )
-            vrs = vrs_signal(closes.list(), vols.list(), sp)
-            wick_long = False
-            trade_burst = (
-                (bid_sz + ask_sz) > 0
-                and vols.list()
-                and (bid_sz + ask_sz) > 2.0 * max(1e-9, vols.list()[-1])
-            )
-            oi_drop = False
-            lsr = lsr_signal(wick_long=wick_long, trade_burst=trade_burst, oi_drop=oi_drop)
-            strat_name, strat_side = select_strategy(mis, vrs, lsr)
-            if strat_name is None or strat_side is None:
-                logger.info("No strategy consensus; sleeping")
-                slog.log_signal(
-                    ts=int(time.time() * 1000),
-                    symbol=symbol,
-                    scores={"mis": mis, "vrs": vrs, "lsr": lsr},
-                    decision=None,
-                )
-                slog.log_why_no_trade(
-                    ts=int(time.time() * 1000),
-                    symbol=symbol,
-                    reasons=["no_consensus"],
-                    context={"mis": mis, "vrs": vrs, "lsr": lsr},
-                )
+            if signal is None:
                 time.sleep(loop_interval)
                 continue
-            signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
-            try:
-                if os.environ.get("INVERT_SIGNALS", "false").strip().lower() == "true":
-                    signal *= -1
-                    logger.info("Signal inversion active: flipping pack strategy direction")
-            except Exception:
-                pass
-            logger.info(
-                f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal > 0 else 'SELL')}"
-            )
-            slog.log_signal(
-                ts=int(time.time() * 1000),
-                symbol=symbol,
-                scores={"mis": mis, "vrs": vrs, "lsr": lsr},
-                decision=f"{strat_name}:{'BUY' if signal > 0 else 'SELL'}",
-            )
 
         # Optional guard: avoid flipping position immediately on opposite signal
         try:
@@ -904,34 +845,18 @@ def main() -> None:
         except Exception:
             pass
 
-        plan = build_order_plan(
+        plan = LiveTestnetOrchestrator.build_order_plan_and_log(
             signal=signal,
-            last_price=mid,
-            equity_usdt=equity,
             symbol=symbol,
+            mid=mid,
+            equity=equity,
             leverage=leverage,
-            price_tick=flt.get("tickSize"),
-            qty_step=flt.get("qtyStep"),
-            min_qty=flt.get("minOrderQty"),
+            flt=flt,
             prefer_limit=prefer_limit,
             post_only=prefer_limit and _env_bool("MAKER_POST_ONLY", True),
-            fixed_notional_usdt=(fixed_notional if fixed_notional > 0 else None),
-        )
-        logger.info(
-            f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
-        )
-        slog.log_order(
-            ts=int(time.time() * 1000),
-            symbol=symbol,
-            plan={
-                "side": plan.side,
-                "qty": plan.qty,
-                "order_type": plan.order_type,
-                "tif": plan.tif,
-                "price": plan.price,
-                "tp": plan.tp,
-                "sl": plan.sl,
-            },
+            fixed_notional=fixed_notional,
+            logger=logger,
+            slog=slog,
         )
 
         # Risk checks
@@ -985,101 +910,41 @@ def main() -> None:
 
         # 4) Place order and then cancel for smoke
         try:
-            # In one-way mode, TP/SL attached on create apply at position level.
-            # Opposite-side orders may conflict (e.g., existing Buy position).
-            # Default: do NOT attach TP/SL on create; apply via trading-stop later.
-            attach = _env_bool("ATTACH_TPSL_ON_CREATE", False)
-            # Fee-aware TP/SL on create if requested
-            tp_on_create = None
-            sl_on_create = None
-            if attach and plan.tp is not None and plan.sl is not None:
-                side_long = (plan.side.upper() == "BUY")
-                if fee_assume_entry == "maker":
-                    fe_bps = maker_fee_bps
-                elif fee_assume_entry == "taker":
-                    fe_bps = taker_fee_bps
-                else:
-                    po = prefer_limit and bool(getattr(runtime.app.exchange, 'maker_post_only', True))
-                    fe_bps = maker_fee_bps if ((plan.order_type == "Limit") and po) else taker_fee_bps
-                fx_bps = taker_fee_bps if fee_assume_exit != "maker" else maker_fee_bps
-                base_px = float(plan.price if plan.price is not None else mid)
-                tp_on_create, sl_on_create = _fee_aware_targets(
-                    base_px,
-                    side_long=side_long,
-                    tp_net=float(ee.tp1),
-                    sl_net=float(getattr(ee, 'sl', 0.0020)),
-                    entry_fee_bps=fe_bps,
-                    exit_fee_bps=fx_bps,
-                )
-                # Favorable tick rounding
-                tick = flt.get("tickSize") if isinstance(flt, dict) else None
-                try:
-                    tick = float(tick) if tick is not None else None
-                except Exception:
-                    tick = None
-                if tick and tick > 0:
-                    if side_long:
-                        tp_on_create = _round_to_tick(tp_on_create, tick, up=True)
-                        sl_on_create = _round_to_tick(sl_on_create, tick, up=False)
-                    else:
-                        tp_on_create = _round_to_tick(tp_on_create, tick, up=False)
-                        sl_on_create = _round_to_tick(sl_on_create, tick, up=True)
-            pos_mode = _position_mode()
-            pos_idx = _position_idx_for_side(plan.side, pos_mode)
-            res = client.place_order(
-                symbol=plan.symbol,
-                side=plan.side,
-                qty=str(round(plan.qty, 6)),
-                orderType=plan.order_type,
-                timeInForce=plan.tif,
-                price=str(plan.price) if plan.price is not None else None,
-                orderLinkId=plan.order_link_id,
-                takeProfit=(str(tp_on_create) if attach and tp_on_create else None),
-                stopLoss=(str(sl_on_create) if attach and sl_on_create else None),
-                positionIdx=pos_idx,
-            )
-            slog.log_order(
-                ts=int(time.time() * 1000),
-                symbol=symbol,
-                plan={
-                    "side": plan.side,
-                    "qty": plan.qty,
-                    "order_type": plan.order_type,
-                    "tif": plan.tif,
-                    "price": plan.price,
-                    "tp": plan.tp,
-                    "sl": plan.sl,
-                    "order_link_id": plan.order_link_id,
-                },
-                result=res,
-            )
-            logger.info("Order placed")
-            traded = True
-            # Trade ledger: entry record (best-effort)
-            ledger.on_entry(
-                symbol=symbol,
-                side_long=(plan.side.upper() == "BUY"),
-                entry_ts=int(time.time() * 1000),
-                price=entry_px,
-                qty=float(plan.qty),
-                spread_pct=spread,
-                imbalance_L5=obi,
-                entry_liquidity=("maker" if (plan.order_type == "Limit" and po) else "taker"),
-                entry_fee_usdt=entry_fee,
-                entry_slippage_pct=0.0,
-                entry_mid_ref=mid,
-            )
+            tick = flt.get("tickSize") if isinstance(flt, dict) else None
             try:
-                ledger.on_order_submitted(symbol, plan.order_link_id, for_entry=True)
+                tick = float(tick) if tick is not None else None
             except Exception:
-                pass
-            # Estimate entry fee for later PnL calculations
-            po = prefer_limit and _env_bool("MAKER_POST_ONLY", True)
-            is_maker_entry = (plan.order_type == "Limit") and po
-            entry_px = float(plan.price if plan.price is not None else mid)
-            entry_notional = plan.qty * entry_px
-            entry_fee = _fee_amount(entry_notional, maker_fee_bps if is_maker_entry else taker_fee_bps)
-            est_entry = {"side": plan.side, "qty": float(plan.qty), "avg": entry_px, "fee_remain": entry_fee}
+                tick = None
+            tp_on_create, sl_on_create = LiveTestnetOrchestrator.compute_attach_tpsl_on_create(
+                plan=plan,
+                mid=mid,
+                ee=ee,
+                prefer_limit=prefer_limit,
+                maker_post_only=bool(getattr(runtime.app.exchange, 'maker_post_only', True)),
+                fee_assume_entry=fee_assume_entry,
+                fee_assume_exit=fee_assume_exit,
+                maker_fee_bps=maker_fee_bps,
+                taker_fee_bps=taker_fee_bps,
+                tick=tick,
+            )
+            res, est_entry = LiveTestnetOrchestrator.place_order_and_record(
+                client=client,
+                symbol=symbol,
+                category=category,
+                plan=plan,
+                tp_on_create=tp_on_create,
+                sl_on_create=sl_on_create,
+                position_mode=_position_mode(),
+                logger=logger,
+                slog=slog,
+                ledger=ledger,
+                mid=mid,
+                spread=spread,
+                obi=obi,
+                maker_fee_bps=maker_fee_bps,
+                taker_fee_bps=taker_fee_bps,
+            )
+            traded = True
 
             # --- After entry: refresh position, reset trailing-stop, and re-apply based on actual avg_price ---
             try:

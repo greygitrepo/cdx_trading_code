@@ -135,6 +135,256 @@ class LiveTestnetOrchestrator:
         logger.info(f"Applied profile overlay: {profile}")
         return True
 
+    # ----- Strategy decisions -----
+    @staticmethod
+    def decide_obflow_signal(*, symbol: str, mid: float, spread: float, bid_sz: float, ask_sz: float,
+                             obi: float, ob_cfg: Any, logger: logging.Logger, slog: Any) -> tuple[int | None, dict, dict | None]:
+        from bot.core.book import L2Book  # local import
+        from bot.core.features import basic_snapshot  # local import
+        from bot.core.signals.obflow import decide as obflow_decide  # local import
+
+        b = L2Book(symbol=symbol)
+        try:
+            b.bids[mid - spread / 2] = bid_sz or 1.0  # type: ignore[index]
+            b.asks[mid + spread / 2] = ask_sz or 1.0  # type: ignore[index]
+        except Exception:
+            pass
+        feat = basic_snapshot(b)
+        sig = obflow_decide(b, ob_cfg)
+        if sig is None:
+            try:
+                slog.log_signal(ts=int(time.time() * 1000), symbol=symbol, scores={"obflow": feat}, decision=None)
+            except Exception:
+                pass
+            return None, feat, None
+        signal = +1 if str(sig.get("side")).upper() == "BUY" else -1
+        try:
+            if os.environ.get("INVERT_SIGNALS", "false").strip().lower() == "true":
+                signal *= -1
+                logger.info("Signal inversion active: flipping OB-Flow direction")
+        except Exception:
+            pass
+        logger.info(f"OB-Flow selected: {sig.get('type')} -> {sig.get('side')}")
+        try:
+            slog.log_signal(
+                ts=int(time.time() * 1000), symbol=symbol, scores={"obflow": feat}, decision=f"OBF:{sig.get('type')}:{sig.get('side')}"
+            )
+        except Exception:
+            pass
+        return signal, feat, sig
+
+    @staticmethod
+    def decide_pack_signal(*, symbol: str, closes: list[float], vols: list[float], obi: float, spread: float,
+                           spread_threshold: float, logger: logging.Logger, slog: Any) -> tuple[int | None, dict]:
+        from bot.core.strategies import StrategyParams, mis_signal, vrs_signal, lsr_signal, select_strategy  # local import
+
+        sp = StrategyParams()
+        mis = mis_signal(closes, (obi + 1) / 2, spread, spread_threshold, sp)
+        vrs = vrs_signal(closes, vols, sp)
+        wick_long = False
+        trade_burst = ((obi + 1) > 0 and vols and len(vols) > 0 and ((abs(obi) + 1e-9) > 0 and (vols[-1] > 0)))
+        oi_drop = False
+        lsr = lsr_signal(wick_long=wick_long, trade_burst=bool(trade_burst), oi_drop=oi_drop)
+        strat_name, strat_side = select_strategy(mis, vrs, lsr)
+        if strat_name is None or strat_side is None:
+            logger.info("No strategy consensus; sleeping")
+            try:
+                slog.log_signal(ts=int(time.time() * 1000), symbol=symbol, scores={"mis": mis, "vrs": vrs, "lsr": lsr}, decision=None)
+                slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["no_consensus"], context={"mis": mis, "vrs": vrs, "lsr": lsr})
+            except Exception:
+                pass
+            return None, {"mis": mis, "vrs": vrs, "lsr": lsr}
+        signal = +1 if str(strat_side) == "Side.BUY" or strat_side == "BUY" else -1
+        try:
+            if os.environ.get("INVERT_SIGNALS", "false").strip().lower() == "true":
+                signal *= -1
+                logger.info("Signal inversion active: flipping pack strategy direction")
+        except Exception:
+            pass
+        logger.info(f"Strategy selected on {symbol}: {strat_name} -> {('BUY' if signal > 0 else 'SELL')}")
+        try:
+            slog.log_signal(
+                ts=int(time.time() * 1000), symbol=symbol, scores={"mis": mis, "vrs": vrs, "lsr": lsr}, decision=f"{strat_name}:{'BUY' if signal > 0 else 'SELL'}",
+            )
+        except Exception:
+            pass
+        return signal, {"mis": mis, "vrs": vrs, "lsr": lsr}
+
+    # ----- Order build/place/report helpers -----
+    @staticmethod
+    def build_order_plan_and_log(*, signal: int, symbol: str, mid: float, equity: float, leverage: float, flt: dict,
+                                 prefer_limit: bool, post_only: bool, fixed_notional: float, logger: logging.Logger, slog: Any):
+        from bot.core.strategy_runner import build_order_plan  # local import
+
+        plan = build_order_plan(
+            signal=signal,
+            last_price=mid,
+            equity_usdt=equality if (equality := equity) or equity == 0 else equity,  # keep same semantics
+            symbol=symbol,
+            leverage=leverage,
+            price_tick=flt.get("tickSize"),
+            qty_step=flt.get("qtyStep"),
+            min_qty=flt.get("minOrderQty"),
+            prefer_limit=prefer_limit,
+            post_only=post_only,
+            fixed_notional_usdt=(fixed_notional if fixed_notional > 0 else None),
+        )
+        logger.info(
+            f"OrderPlan: side={plan.side} qty={plan.qty:.6f} type={plan.order_type} tif={plan.tif} tp={plan.tp:.2f} sl={plan.sl:.2f}"
+        )
+        try:
+            slog.log_order(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                plan={
+                    "side": plan.side,
+                    "qty": plan.qty,
+                    "order_type": plan.order_type,
+                    "tif": plan.tif,
+                    "price": plan.price,
+                    "tp": plan.tp,
+                    "sl": plan.sl,
+                },
+            )
+        except Exception:
+            pass
+        return plan
+
+    @staticmethod
+    def compute_attach_tpsl_on_create(*, plan: Any, mid: float, ee: Any, prefer_limit: bool, maker_post_only: bool,
+                                      fee_assume_entry: str, fee_assume_exit: str, maker_fee_bps: float, taker_fee_bps: float, tick: float | None) -> tuple[float | None, float | None]:
+        def _round_to_tick(price: float, tick_size: float | None, *, up: bool | None = None) -> float:
+            if not tick_size or tick_size <= 0:
+                return price
+            mult = price / tick_size
+            if up is True:
+                from math import ceil
+
+                return ceil(mult) * tick_size
+            if up is False:
+                from math import floor
+
+                return floor(mult) * tick_size
+            from math import floor
+
+            return floor(mult) * tick_size
+
+        def _fee_targets(entry_price: float, *, side_long: bool, tp_net: float, sl_net: float, fe_bps: float, fx_bps: float) -> tuple[float, float]:
+            fe = max(0.0, float(fe_bps)) / 1e4
+            fx = max(0.0, float(fx_bps)) / 1e4
+            tp_gross = max(0.0, tp_net + (fe + fx))
+            sl_gross = max(0.0, sl_net - (fe + fx))
+            if side_long:
+                return entry_price * (1 + tp_gross), entry_price * (1 - sl_gross)
+            return entry_price * (1 - tp_gross), entry_price * (1 + sl_gross)
+
+        tp_on_create = None
+        sl_on_create = None
+        attach = os.environ.get("ATTACH_TPSL_ON_CREATE", "false").strip().lower() == "true"
+        if attach and plan.tp is not None and plan.sl is not None:
+            side_long = (str(plan.side).upper() == "BUY")
+            if fee_assume_entry == "maker":
+                fe_bps = maker_fee_bps
+            elif fee_assume_entry == "taker":
+                fe_bps = taker_fee_bps
+            else:
+                po = prefer_limit and maker_post_only
+                fe_bps = maker_fee_bps if ((str(plan.order_type) == "Limit") and po) else taker_fee_bps
+            fx_bps = taker_fee_bps if fee_assume_exit != "maker" else maker_fee_bps
+            base_px = float(plan.price if plan.price is not None else mid)
+            tp_on_create, sl_on_create = _fee_targets(
+                base_px,
+                side_long=side_long,
+                tp_net=float(getattr(ee, "tp1", 0.0010)),
+                sl_net=float(getattr(ee, "sl", 0.0020)),
+                fe_bps=fe_bps,
+                fx_bps=fx_bps,
+            )
+            if tick and tick > 0:
+                if side_long:
+                    tp_on_create = _round_to_tick(tp_on_create, tick, up=True)
+                    sl_on_create = _round_to_tick(sl_on_create, tick, up=False)
+                else:
+                    tp_on_create = _round_to_tick(tp_on_create, tick, up=False)
+                    sl_on_create = _round_to_tick(sl_on_create, tick, up=True)
+        return tp_on_create, sl_on_create
+
+    @staticmethod
+    def place_order_and_record(
+        *, client: Any, symbol: str, category: str, plan: Any, tp_on_create: float | None, sl_on_create: float | None,
+        position_mode: str, logger: logging.Logger, slog: Any, ledger: Any, mid: float, spread: float, obi: float,
+        maker_fee_bps: float, taker_fee_bps: float,
+    ) -> tuple[dict, dict]:
+        def _position_idx_for_side(side: str, mode: str) -> int | None:
+            if mode != "HEDGE":
+                return None
+            return 1 if str(side).upper() == "BUY" else 2
+
+        def _fee_amount(notional: float, bps: float) -> float:
+            try:
+                return abs(float(notional)) * max(0.0, float(bps)) / 1e4
+            except Exception:
+                return 0.0
+
+        pos_idx = _position_idx_for_side(plan.side, position_mode)
+        res = client.place_order(
+            symbol=plan.symbol,
+            side=plan.side,
+            qty=str(round(plan.qty, 6)),
+            orderType=plan.order_type,
+            timeInForce=plan.tif,
+            price=str(plan.price) if plan.price is not None else None,
+            orderLinkId=plan.order_link_id,
+            takeProfit=(str(tp_on_create) if tp_on_create else None),
+            stopLoss=(str(sl_on_create) if sl_on_create else None),
+            positionIdx=pos_idx,
+        )
+        try:
+            slog.log_order(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                plan={
+                    "side": plan.side,
+                    "qty": plan.qty,
+                    "order_type": plan.order_type,
+                    "tif": plan.tif,
+                    "price": plan.price,
+                    "tp": plan.tp,
+                    "sl": plan.sl,
+                    "order_link_id": plan.order_link_id,
+                },
+                result=res,
+            )
+        except Exception:
+            pass
+        logger.info("Order placed")
+
+        # Trade ledger entry (best-effort)
+        entry_px = float(plan.price if plan.price is not None else mid)
+        po = (str(plan.order_type) == "Limit") and (os.environ.get("MAKER_POST_ONLY", "true").lower() == "true")
+        entry_notional = plan.qty * entry_px
+        entry_fee = _fee_amount(entry_notional, maker_fee_bps if po else taker_fee_bps)
+        try:
+            ledger.on_entry(
+                symbol=symbol,
+                side_long=(str(plan.side).upper() == "BUY"),
+                entry_ts=int(time.time() * 1000),
+                price=entry_px,
+                qty=float(plan.qty),
+                spread_pct=spread,
+                imbalance_L5=obi,
+                entry_liquidity=("maker" if po else "taker"),
+                entry_fee_usdt=entry_fee,
+                entry_slippage_pct=0.0,
+                entry_mid_ref=mid,
+            )
+            ledger.on_order_submitted(symbol, plan.order_link_id, for_entry=True)
+        except Exception:
+            pass
+        est_entry = {"side": plan.side, "qty": float(plan.qty), "avg": entry_px, "fee_remain": entry_fee}
+        return res, est_entry
+
+
     @staticmethod
     def refresh_universe(client: Any, runtime: Any, category: str, logger: logging.Logger):
         from bot.core.rotation import build_universe, Universe as _U  # local import
