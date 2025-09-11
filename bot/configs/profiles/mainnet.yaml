@@ -9,6 +9,15 @@ risk:
   min_free_balance_usdt: 1
 
 params:
+  # OB-Flow signal thresholds
+  obflow:
+    depth_imb_L5_min: 0.35           # A패턴 민감도 완화
+    spread_tight_mult_mid: 0.0010    # B패턴 타이트 조건 완화
+    b_micro_dev_mult_spread_min: 0.35 # B패턴 히스테리시스(뒤집힘 완화)
+    tps_min_breakout: 10.0           # TPS 게이트 상향으로 저활동 억제
+    c_absorption_min: 0.50
+    d_wide_spread_mult_mid: 0.0025
+    d_micro_dev_mult_spread: 0.65
   apex:
     scanner:
       min_15m_turnover_usd: 80000000
@@ -27,10 +36,13 @@ params:
       time_stop_sec: 75
   orderbook:
     min_depth_usd: 20000
+    depth_levels: 5                  # L5 합산으로 불균형 안정화
+  universe:
+    topN: 10                         # 디스커버리 시 상위 N
   entry_exit:
     tp1: 0.0010
-    sl: 0.0015
-    trail_after_tp1: 0.0008
+    sl: 0.0035                       # SL 여유 확대(조기 청산 완화)
+    trail_after_tp1: 0.0015          # 트레일 활성화 기준 상향
   funding_time:
     avoid_taker_within_min: 5
   execution:
@@ -41,7 +53,7 @@ params:
 
 runtime:
   strategy: apex
-  discover_symbols: false
+  discover_symbols: true             # 심볼 회전 활성화
   consensus_ticks: 3
   no_trade_sleep_sec: 1.0
   loop_idle_sec: 1.0
