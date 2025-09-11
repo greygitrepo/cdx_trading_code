@@ -9,6 +9,22 @@ risk:
   min_free_balance_usdt: 200
 
 params:
+  apex:
+    scanner:
+      min_15m_turnover_usd: 80000000
+      max_spread_pct: 0.02
+      min_depth_usd_l10: 400000
+    strategy_A:
+      tp1_pct: 0.18
+      tp2_pct: 0.30
+      sl_pct: 0.35
+      time_stop_sec: 120
+    strategy_B:
+      entry_slip_guard_pct: 0.06
+      tp1_pct: 0.35
+      tp2_pct: 0.55
+      sl_pct: 0.35
+      time_stop_sec: 75
   orderbook:
     min_depth_usd: 20000
   entry_exit:

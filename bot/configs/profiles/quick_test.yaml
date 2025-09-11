@@ -4,6 +4,22 @@ exchange:
   taker_on_strong_score: true
   fallback_ioc: true
 params:
+  apex:
+    scanner:
+      min_15m_turnover_usd: 5000000
+      max_spread_pct: 0.08
+      min_depth_usd_l10: 80000
+    strategy_A:
+      tp1_pct: 0.12
+      tp2_pct: 0.20
+      sl_pct: 0.20
+      entry_ttl_sec: 10
+    strategy_B:
+      entry_slip_guard_pct: 0.12
+      tp1_pct: 0.25
+      tp2_pct: 0.40
+      sl_pct: 0.25
+      tp_postonly_ttl_sec: 10
   regime:
     strictness: off
   orderbook:
