@@ -949,6 +949,166 @@ class LiveTestnetRunner:
             time.sleep(loop_interval)
             logger.info(f"Cycle done for {symbol}; rotating if needed")
 
+    @staticmethod
+    def run_main(args) -> None:
+        """End-to-end entry used by run_live_testnet.py.
+
+        Performs .env loading, logger setup, runtime/profile/strategy wiring,
+        client/fees preparation, then delegates to run_loop.
+        """
+        # Deferred imports to avoid E402 and keep optional deps lazy
+        from bot.core.config import load_runtime  # type: ignore
+        from bot.utils.structlog import StructLogger  # type: ignore
+        from bot.core.ledger import TradeLedger  # type: ignore
+        try:
+            from bot.core.reporting.writer import TradeLedgerWriter  # type: ignore
+        except Exception:
+            TradeLedgerWriter = None  # type: ignore
+        from bot.core.exchange.bybit_v5 import BybitV5Client  # type: ignore
+
+        run_id = f"run_{time.strftime('%Y%m%d_%H%M%S', time.gmtime())}"
+        logger, logs_dir = setup_loggers(run_id)
+        n_loaded = load_dotenv_if_present()
+        if n_loaded:
+            logger.info(f"Loaded {n_loaded} vars from .env")
+        slog = StructLogger(logs_dir, run_id)
+        ledger = TradeLedger(run_id=run_id, out_dir=str(_P("reports")))
+        tl_writer = None
+        try:
+            tle_enabled = os.environ.get("TRADE_LEDGER_ENABLED", "true").strip().lower() == "true"
+            tle_formats = [s.strip() for s in os.environ.get("TRADE_LEDGER_FORMATS", "csv,jsonl").split(",") if s.strip()]
+        except Exception:
+            tle_enabled = True
+            tle_formats = ["csv", "jsonl"]
+        if tle_enabled and TradeLedgerWriter is not None:
+            tl_writer = TradeLedgerWriter(run_id, str(logs_dir))
+
+        require_env_flags(logger)
+        runtime = load_runtime()
+        # Apply CLI strategy overrides and profile overlay
+        try:
+            LiveTestnetOrchestrator.apply_strategy_overrides(runtime.app, args.strategy, args.strategy_param)
+        except Exception:
+            pass
+        try:
+            LiveTestnetOrchestrator.emit_strategy_header(runtime.app, logs_dir, run_id)
+        except Exception:
+            pass
+        try:
+            LiveTestnetOrchestrator.export_resolved_from_yaml(runtime, logger, slog)
+        except Exception:
+            pass
+        if getattr(args, "profile", None):
+            try:
+                if LiveTestnetOrchestrator.apply_profile_overlay(runtime, args.profile, logger):
+                    LiveTestnetOrchestrator.export_resolved_from_yaml(runtime, logger, slog)
+            except Exception:
+                pass
+
+        os.environ.setdefault("DRY_RUN", "true")
+
+        client = BybitV5Client()
+        category = str(getattr(runtime.app.exchange, 'category', 'linear'))
+
+        # Fee rates (best-effort via API, fallback to env/defaults)
+        maker_fee_bps = 2.0
+        taker_fee_bps = 5.5
+        try:
+            fr = client.get_fee_rate(category=category, symbol=os.environ.get("BYBIT_SYMBOL", "BTCUSDT"))
+            it = (fr.get("result", {}).get("list", []) or [{}])[0]
+            mk = it.get("makerFeeRate")
+            tk = it.get("takerFeeRate")
+            if mk is not None:
+                maker_fee_bps = max(0.0, float(mk) * 1e4)
+            if tk is not None:
+                taker_fee_bps = max(0.0, float(tk) * 1e4)
+        except Exception:
+            try:
+                maker_fee_bps = float(os.environ.get("MAKER_FEE_BPS", maker_fee_bps))
+                taker_fee_bps = float(os.environ.get("TAKER_FEE_BPS", taker_fee_bps))
+            except Exception:
+                pass
+
+        fee_assume_entry = os.environ.get("FEE_ASSUME_ENTRY", "auto").lower()
+        fee_assume_exit = os.environ.get("FEE_ASSUME_EXIT", "taker").lower()
+
+        # Row builder for trade ledger writer output
+        def _build_row_from_rec(run_id_val, rec):  # type: ignore[valid-type]
+            def pct(x):
+                try:
+                    return float(x) * 100.0
+                except Exception:
+                    return 0.0
+            try:
+                from bot.core.reporting.ledger import TradeLedgerRow  # type: ignore
+            except Exception:
+                return None
+            return TradeLedgerRow(
+                trade_id=f"{run_id_val}:{rec.symbol}:{rec.entry_time}",
+                run_id=run_id_val,
+                symbol=rec.symbol,
+                side=rec.side,
+                entry_time=int(rec.entry_time),
+                entry_price=float(rec.entry_price),
+                entry_qty=float(rec.entry_qty),
+                entry_value_usdt=float(rec.entry_value_usdt),
+                entry_liquidity=(rec.entry_liquidity if rec.entry_liquidity in ("maker", "taker") else None),
+                entry_fee_usdt=float(rec.entry_fee_usdt),
+                entry_slippage_pct=pct(rec.entry_slippage_pct),
+                exit_time=int(rec.exit_time or 0),
+                exit_price=float(rec.exit_price or 0.0),
+                exit_qty=float(rec.exit_qty or 0.0),
+                exit_value_usdt=float(rec.exit_value_usdt or 0.0),
+                exit_liquidity=(rec.exit_liquidity if rec.exit_liquidity in ("maker", "taker") else None),
+                exit_fee_usdt=float(rec.exit_fee_usdt or 0.0),
+                exit_slippage_pct=pct(rec.exit_slippage_pct or 0.0),
+                exit_reason=str(rec.exit_reason or "MANUAL"),
+                hold_secs=float(rec.hold_secs or 0),
+                realized_pnl_usdt=float(rec.realized_pnl_usdt),
+                realized_pnl_pct_on_value=pct(rec.realized_pnl_usdt / rec.entry_value_usdt) if (rec.entry_value_usdt or 0) != 0 else 0.0,
+                max_favorable_excursion_pct=pct(rec.max_favorable_excursion_pct),
+                max_adverse_excursion_pct=pct(rec.max_adverse_excursion_pct),
+                orders_submitted=int(rec.orders_submitted),
+                orders_filled=int(rec.orders_filled),
+                orders_canceled=int(rec.orders_canceled),
+                spread_pct_at_entry=pct(rec.spread_pct_at_entry or 0.0),
+                depth_L5_bid_usd=float(rec.depth_L5_bid_usd or 0.0),
+                depth_L5_ask_usd=float(rec.depth_L5_ask_usd or 0.0),
+                imbalance_L5=float(rec.imbalance_L5 or 0.0),
+                tps_entry=float(rec.tps_entry or 0.0),
+                volatility_1m_pct=float(rec.volatility_1m_pct or 0.0),
+                volatility_5m_pct=float(rec.volatility_5m_pct or 0.0),
+                funding_min_to_next=(float(rec.funding_min_to_next) if rec.funding_min_to_next is not None else None),
+                trail_armed_at_price=(float(rec.trail_armed_at_price) if rec.trail_armed_at_price is not None else None),
+                trail_steps=int(rec.trail_steps) if getattr(rec, "trail_steps", None) is not None else None,
+                max_trail_offset_pct=(pct(rec.max_trail_offset_pct) if getattr(rec, "max_trail_offset_pct", None) is not None else None),
+            )
+
+        LiveTestnetRunner.run_loop(
+            client=BybitV5Client(),
+            runtime=runtime,
+            logger=logger,
+            slog=slog,
+            ledger=ledger,
+            tl_writer=tl_writer,
+            tle_formats=tle_formats,
+            row_builder=_build_row_from_rec,
+            run_id=run_id,
+            category=category,
+            strategy=str(getattr(runtime.app.runtime, 'strategy', 'obflow')),
+            leverage=float(getattr(runtime.app.risk, 'max_leverage', 10)),
+            fixed_notional=_env_float("ORDER_SIZE_USDT", 0.0),
+            maker_fee_bps=maker_fee_bps,
+            taker_fee_bps=taker_fee_bps,
+            fee_assume_entry=fee_assume_entry,
+            fee_assume_exit=fee_assume_exit,
+        )
+
+        try:
+            ledger.write_daily_summary()
+        except Exception:
+            pass
+
 
 
     @staticmethod

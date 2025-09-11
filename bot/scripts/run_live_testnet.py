@@ -189,25 +189,10 @@ def main() -> None:
     if args.actor_mode:
         asyncio.run(_actor_main(args))
         return
-
-    # Run ID and loggers
-    run_id = f"run_{_dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-    logger, logs_dir = setup_loggers(run_id)
-    # Load .env if present (no override)
-    n_loaded = load_dotenv_if_present()
-    if n_loaded:
-        logger.info(f"Loaded {n_loaded} vars from .env")
-    slog = StructLogger(logs_dir, run_id)
-    ledger = TradeLedger(run_id=run_id, out_dir=_P("reports"))
-    # Optional per-trade ledger writer (CSV/JSONL under logs/run_<RUN_ID>)
-    tle_enabled = os.environ.get("TRADE_LEDGER_ENABLED", "true").strip().lower() == "true"
-    tle_formats = [s.strip() for s in os.environ.get("TRADE_LEDGER_FORMATS", "csv,jsonl").split(",") if s.strip()]
-    tl_writer = None
-    if tle_enabled and TradeLedgerWriter is not None:
-        tl_writer = TradeLedgerWriter(run_id, str(logs_dir))
-    require_env_flags(logger)
-    # Load YAML (single source) and export key params into ENV with precedence: YAML > ENV > Defaults
-    runtime = load_runtime()
+    # Delegate full run (init + main loop) to runner
+    from bot.app.runners.live_testnet_runner import LiveTestnetRunner as _Runner
+    _Runner.run_main(args)
+    return
     # Apply CLI strategy selection into AppConfig (preserve existing defaults)
     cli_strategy = (args.strategy or "").strip()
     if cli_strategy:
