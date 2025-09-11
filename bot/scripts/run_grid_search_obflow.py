@@ -48,7 +48,7 @@ def main() -> None:
     ap.add_argument("--cooldown-sec", type=int, default=30)
     ap.add_argument("--assume-entry", default="auto", choices=["auto", "maker", "taker"])
     ap.add_argument("--assume-exit", default="taker", choices=["maker", "taker"])
-    ap.add_argument("--preset", default="default", choices=["default", "loose"])
+    ap.add_argument("--preset", default="yaml", choices=["yaml", "default", "loose"])
     args = ap.parse_args()
 
     tp_list = [max(0.0, float(x) / 1e4) for x in str(args.tp_bps).split(",") if x.strip()]

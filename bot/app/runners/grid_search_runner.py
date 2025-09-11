@@ -12,6 +12,7 @@ from bot.core.book import L2Book, apply_delta, apply_snapshot
 from bot.core.data_ws import PublicWS
 from bot.core.features import basic_snapshot
 from bot.core.signals.obflow import OBFlowConfig, decide
+from bot.core.config import load_runtime
 
 
 def _fee_aware_targets(
@@ -78,6 +79,13 @@ class GridSearchOBFlowRunner:
         self.taker_fee_bps = taker_fee_bps
 
     def _preset_cfg(self) -> OBFlowConfig:
+        if self.preset == "yaml":
+            # Use current YAML params to mirror live settings
+            try:
+                rt = load_runtime()
+                return OBFlowConfig.from_params(rt.params)
+            except Exception:
+                pass
         if self.preset == "loose":
             return OBFlowConfig(
                 depth_imb_L5_min=0.20,
