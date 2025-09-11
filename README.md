@@ -138,7 +138,7 @@ SLA 로그(주기 5초)
 ## 설정(Configuration)
 ### YAML 단일 소스(통합)
 - 기본: `bot/configs/config.yaml`
-- 프로파일(오버레이): `bot/configs/profiles/*.yaml`(예: `mainnet.yaml`, `testnet.yaml`, `quick_test.yaml`)
+- 프로파일(오버레이): `bot/configs/profiles/*.yaml`만 사용합니다(예: `mainnet.yaml`, `testnet.yaml`, `quick_test.yaml`). 루트의 `bot/configs/{mainnet,testnet,quick_test,quicktest}.yaml`는 중복으로 제거되었습니다.
 - 전략/리스크/레짐/라우팅/루프 파라미터는 YAML(ENV 아님)
 - 운영 토글은 ENV로만 제어: `LIVE_MODE/TESTNET/STUB/PAPER`, `BYBIT_API_KEY/SECRET`, `DRY_RUN`, `ENABLE_PRIVATE_WS`
 
