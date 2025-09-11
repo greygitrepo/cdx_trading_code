@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path as _P
 from typing import Any
+import threading
 import time
 
 from bot.utils.structlog import init_run_dir
@@ -793,6 +794,54 @@ class LiveTestnetRunner:
     _lev_set: set[tuple[str, str]] = set()  # (category,symbol)
     _pos_cache: dict[str, tuple[float, dict]] = {}  # key=symbol
     _oo_cache: dict[str, tuple[float, dict]] = {}   # key=symbol
+    _ob_ws_latest: dict[str, dict] = {}
+    _ob_ws_threads: dict[str, threading.Thread] = {}
+
+    @staticmethod
+    def _ensure_ws_orderbook(symbol: str, *, depth: int, logger: logging.Logger) -> None:
+        try:
+            # Lazily start one background thread per symbol to collect WS orderbook events
+            if symbol in LiveTestnetRunner._ob_ws_threads and LiveTestnetRunner._ob_ws_threads[symbol].is_alive():
+                return
+            from bot.core.data_ws import PublicWS  # local import to avoid hard dep at import time
+            ws = PublicWS(symbol=symbol, depth=int(depth))
+
+            def _run():
+                for ev in ws.orderbook_stream():
+                    try:
+                        etype = str(ev.get("type") or "delta")
+                        bids = ev.get("bids") or []
+                        asks = ev.get("asks") or []
+                        # Normalize and compute top-of-book metrics
+                        lb = [(float(p), float(s)) for p, s in bids[:depth]]
+                        la = [(float(p), float(s)) for p, s in asks[:depth]]
+                        mid = spr = bid_sz = ask_sz = 0.0
+                        if lb and la:
+                            best_bid_p, bid_sz = lb[0]
+                            best_ask_p, ask_sz = la[0]
+                            mid = (best_bid_p + best_ask_p) / 2.0
+                            spr = (best_ask_p - best_bid_p) / mid if mid > 0 else 0.0
+                        LiveTestnetRunner._ob_ws_latest[symbol] = {
+                            "levels_b": lb,
+                            "levels_a": la,
+                            "mid": mid,
+                            "spread": spr,
+                            "bid_sz": bid_sz,
+                            "ask_sz": ask_sz,
+                            "ts_ms": int(ev.get("ts") or 0),
+                            "seq": int(ev.get("seq") or 0),
+                            "etype": etype,
+                            "updated": time.time(),
+                        }
+                    except Exception:
+                        continue
+
+            t = threading.Thread(target=_run, name=f"ob-ws-{symbol}", daemon=True)
+            t.start()
+            LiveTestnetRunner._ob_ws_threads[symbol] = t
+            logger.info(f"Started WS orderbook feed for {symbol} depth={depth}")
+        except Exception:
+            return
     """Encapsulates the main rotation loop for run_live_testnet.
 
     This runner stitches together the orchestrator helpers into a cohesive loop,
@@ -1388,6 +1437,50 @@ class LiveTestnetRunner:
 
     @staticmethod
     def get_orderbook_context(client: Any, *, symbol: str, category: str, ob_depth: int, logger: logging.Logger, slog: Any):
+        # Prefer WS path if enabled and recent snapshot available; else fallback to REST
+        use_ws = os.environ.get("ENABLE_PUBLIC_WS", "false").strip().lower() == "true"
+        levels_b = levels_a = None
+        if use_ws:
+            LiveTestnetRunner._ensure_ws_orderbook(symbol, depth=ob_depth, logger=logger)
+            ws_stale_sec = float(os.environ.get("OB_WS_STALE_SEC", "2").split("#",1)[0] or 2)
+            latest = LiveTestnetRunner._ob_ws_latest.get(symbol)
+            if latest and (time.time() - float(latest.get("updated", 0.0))) <= max(0.5, ws_stale_sec):
+                mid = float(latest.get("mid", 0.0))
+                spread = float(latest.get("spread", 0.0))
+                bid_sz = float(latest.get("bid_sz", 0.0))
+                ask_sz = float(latest.get("ask_sz", 0.0))
+                obi = ((bid_sz - ask_sz) / (bid_sz + ask_sz)) if (bid_sz + ask_sz) > 0 else 0.0
+                levels_b = latest.get("levels_b") or []
+                levels_a = latest.get("levels_a") or []
+                # TPS from seq deltas
+                tps = None
+                try:
+                    seq = int(latest.get("seq") or 0)
+                except Exception:
+                    seq = 0
+                if seq:
+                    now = time.time()
+                    prev = LiveTestnetRunner._tps_state.get(symbol)
+                    if prev is not None:
+                        prev_seq, prev_ts = prev
+                        dseq = max(0, int(seq) - int(prev_seq))
+                        dt = max(1e-3, now - float(prev_ts))
+                        tps = float(dseq) / dt
+                    LiveTestnetRunner._tps_state[symbol] = (int(seq), now)
+                return {
+                    "mid": mid,
+                    "spread": spread,
+                    "bid_sz": bid_sz,
+                    "ask_sz": ask_sz,
+                    "obi": obi,
+                    "parse_ok": True,
+                    "raw": {},
+                    "levels_b": levels_b,
+                    "levels_a": levels_a,
+                    "tps": tps,
+                }
+
+        # REST fallback path
         ob = client.get_orderbook(symbol=symbol, depth=ob_depth, category=category)
         try:
             slog.log_info(
