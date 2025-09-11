@@ -79,6 +79,8 @@ class OrderBookParams(BaseModel):
     obi_window_ms: int = 1500
     obi_threshold_mis: float = 0.60
     min_depth_usd: int = 15000
+    # Number of L2 levels to consider when computing imbalance and building OB snapshot
+    depth_levels: int = 1
 
 
 class OBFlowParams(BaseModel):

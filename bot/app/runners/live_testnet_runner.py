@@ -86,6 +86,7 @@ class LiveTestnetOrchestrator:
                 ("SL_PCT", getattr(ee, "sl", sl_pct_default)),
                 ("TRAIL_AFTER_TP1_PCT", trail_after_tp1),
                 ("MIN_DEPTH_USD", getattr(ob, "min_depth_usd", 50000)),
+                ("ORDERBOOK_DEPTH", getattr(ob, "depth_levels", 1)),
                 ("AVOID_TAKER_WITHIN_MIN", getattr(fu, "avoid_taker_within_min", 5)),
                 ("PREFER_LIMIT_DEFAULT", bool(getattr(ex, "maker_post_only", True))),
                 ("DYNAMIC_TAKER_ON_STRONG", bool(getattr(ex, "taker_on_strong_score", True))),

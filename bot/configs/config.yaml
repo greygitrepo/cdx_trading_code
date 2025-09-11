@@ -56,6 +56,7 @@ params:
     obi_window_ms: 1500            # OBI 계산 윈도우(ms)
     obi_threshold_mis: 0.60        # MIS용 OBI 임계
     min_depth_usd: 50000           # L1 명목 유동성(USDT) 최소
+    depth_levels: 5                # imbalance 계산에 사용할 L2 레벨 수
 
   # OB-Flow signal thresholds (A/B/C/D)
   obflow:
