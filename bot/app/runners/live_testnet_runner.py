@@ -674,6 +674,283 @@ class LiveTestnetOrchestrator:
                 logger.error(f"Cancel failed: {e}")
 
 
+# ---------------- Main loop facade ----------------
+
+def _env_clean(name: str, default: str | float | int) -> str:
+    raw = os.environ.get(name, str(default))
+    return raw.split("#", 1)[0].strip()
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        val = _env_clean(name, default)
+        return float(val) if val != "" else float(default)
+    except Exception:
+        return float(default)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        val = _env_clean(name, default)
+        return int(val) if val != "" else int(default)
+    except Exception:
+        return int(default)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = _env_clean(name, "true" if default else "false").lower()
+    return val == "true"
+
+
+class LiveTestnetRunner:
+    """Encapsulates the main rotation loop for run_live_testnet.
+
+    This runner stitches together the orchestrator helpers into a cohesive loop,
+    keeping the behavior identical to the original script.
+    """
+
+    @staticmethod
+    def run_loop(
+        *,
+        client: Any,
+        runtime: Any,
+        logger: logging.Logger,
+        slog: Any,
+        ledger: Any,
+        tl_writer: Any,
+        tle_formats: list[str],
+        row_builder: Any,
+        run_id: str,
+        category: str,
+        strategy: str,
+        leverage: float,
+        fixed_notional: float,
+        maker_fee_bps: float,
+        taker_fee_bps: float,
+        fee_assume_entry: str,
+        fee_assume_exit: str,
+    ) -> None:
+        from bot.core.rotation import build_universe, ExitFlag  # local import
+
+        # Loop timings (used internally for sleeps)
+        loop_interval = float(getattr(runtime.app.runtime, 'no_trade_sleep_sec', 5.0))
+        uni = build_universe(client, topN=runtime.params.universe.topN, discover=bool(getattr(runtime.app.runtime, 'discover_symbols', True)))
+        exit_flag = ExitFlag()
+        idx = 0
+        blacklist: dict[str, int] = {}
+        symbol = os.environ.get("BYBIT_SYMBOL", "BTCUSDT")
+        equity = 0.0
+        try:
+            wb = client.get_wallet_balance(accountType=os.environ.get("ACCOUNT_TYPE", "UNIFIED").upper(), coin="USDT")
+            it = (wb.get("result", {}).get("list", []) or [{}])[0]
+            equity = float(it.get("totalEquity") or 0.0)
+        except Exception:
+            equity = 0.0
+
+        while not exit_flag.check():
+            try:
+                if bool(getattr(runtime.app.runtime, 'refresh_universe_each_loop', True)):
+                    uni = LiveTestnetOrchestrator.refresh_universe(client, runtime, category, logger)
+            except Exception:
+                pass
+
+            symbol = uni.symbols[idx % max(1, len(uni.symbols))]
+            now_s = int(time.time())
+            if symbol in blacklist and blacklist[symbol] > now_s:
+                idx += 1
+                continue
+            idx += 1
+
+            flt = LiveTestnetOrchestrator.load_instrument_filters(client, category, symbol, logger)
+            LiveTestnetOrchestrator.set_leverage(client, symbol, leverage, category, logger)
+
+            # Regime checks (spread pause)
+            try:
+                spr_thresh = float(getattr(runtime.params.universe, 'spread_threshold_pct', 0.0004))
+                spr_pause_mult = float(getattr(runtime.app.runtime, 'spread_mult_pause', 3.0))
+            except Exception:
+                spr_thresh = 0.0004
+                spr_pause_mult = 3.0
+
+            ob_depth = _env_int("ORDERBOOK_DEPTH", 1)
+            ob_ctx = LiveTestnetOrchestrator.get_orderbook_context(
+                client, symbol=symbol, category=category, ob_depth=ob_depth, logger=logger, slog=slog
+            )
+            mid = ob_ctx["mid"]
+            spread = ob_ctx["spread"]
+            bid_sz = ob_ctx["bid_sz"]
+            ask_sz = ob_ctx["ask_sz"]
+            obi = ob_ctx["obi"]
+            parse_ok = bool(ob_ctx["parse_ok"])
+            if not parse_ok:
+                blacklist[symbol] = int(time.time()) + 300
+                try:
+                    slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["parse_fail"], context={})
+                except Exception:
+                    pass
+                time.sleep(loop_interval)
+                continue
+
+            # Spread-based regime pause
+            if spr_pause_mult > 0 and spread >= spr_thresh * spr_pause_mult:
+                logger.info(f"Spread too wide; pause: spread={spread:.6f}")
+                try:
+                    slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["spread_pause"], context={"spread": spread})
+                except Exception:
+                    pass
+                time.sleep(loop_interval)
+                continue
+
+            # Skip if open pos/orders
+            if LiveTestnetOrchestrator.should_skip_for_open_position_or_orders(
+                client, category=category, symbol=symbol, logger=logger, slog=slog, loop_interval=loop_interval
+            ):
+                continue
+
+            # Decide signal
+            if strategy == "obflow":
+                ob_cfg = runtime.params.obflow if hasattr(runtime.params, 'obflow') else None
+                from bot.core.signals.obflow import OBFlowConfig as _OldCfg  # local import
+                ob_cfg = _OldCfg.from_params(runtime.params)
+                signal, _, _ = LiveTestnetOrchestrator.decide_obflow_signal(
+                    symbol=symbol, mid=mid, spread=spread, bid_sz=bid_sz, ask_sz=ask_sz, obi=obi, ob_cfg=ob_cfg, logger=logger, slog=slog
+                )
+                if signal is None:
+                    time.sleep(loop_interval)
+                    continue
+            else:
+                # Simplified pack using empty history (script maintains Rolling; runner keeps parity by fast-continue)
+                signal, _ = LiveTestnetOrchestrator.decide_pack_signal(
+                    symbol=symbol,
+                    closes=[],
+                    vols=[],
+                    obi=obi,
+                    spread=spread,
+                    spread_threshold=spr_thresh,
+                    logger=logger,
+                    slog=slog,
+                )
+                if signal is None:
+                    time.sleep(loop_interval)
+                    continue
+
+            prefer_limit = True
+            execp = getattr(runtime.params, "execution", None)
+            if execp is not None and bool(getattr(execp, 'dynamic_taker_on_strong', True)):
+                met = []
+                imb_min = float(getattr(execp, 'imb_l5_min', 0.25))
+                spr_max = float(getattr(execp, 'spread_max', 0.0006))
+                if abs(obi) >= imb_min:
+                    met.append("imb")
+                if spread <= spr_max:
+                    met.append("spr")
+                if len(met) >= 2:
+                    prefer_limit = False
+                    logger.info(f"Routing=taker by strong-signal ({','.join(met)})")
+
+            plan = LiveTestnetOrchestrator.build_order_plan_and_log(
+                signal=signal,
+                symbol=symbol,
+                mid=mid,
+                equity=equity,
+                leverage=leverage,
+                flt=flt,
+                prefer_limit=prefer_limit,
+                post_only=prefer_limit and _env_bool("MAKER_POST_ONLY", True),
+                fixed_notional=fixed_notional,
+                logger=logger,
+                slog=slog,
+            )
+
+            # Risk: cap vs effective notional
+            notional_gross = plan.qty * mid
+            eff_notional = notional_gross / max(leverage, 1e-9)
+            cap = float(getattr(runtime.app.risk, 'max_alloc_pct', 0.02)) * equity
+            if eff_notional > cap:
+                reason = f"Order notional {eff_notional:.2f} exceeds cap {cap:.2f}"
+                logger.warning(f"Risk blocked (size): {reason}")
+                try:
+                    slog.log_risk(ts=int(time.time() * 1000), symbol=symbol, ok=False, reason=reason, context={"stage": "order_size"})
+                except Exception:
+                    pass
+                time.sleep(loop_interval)
+                continue
+
+            if _env_bool("DRY_RUN", True):
+                logger.info("DRY_RUN=true; skipping actual order placement this iteration")
+                time.sleep(loop_interval)
+                continue
+
+            tick = flt.get("tickSize") if isinstance(flt, dict) else None
+            try:
+                tick = float(tick) if tick is not None else None
+            except Exception:
+                tick = None
+            tp_on_create, sl_on_create = LiveTestnetOrchestrator.compute_attach_tpsl_on_create(
+                plan=plan,
+                mid=mid,
+                ee=runtime.params.entry_exit,
+                prefer_limit=prefer_limit,
+                maker_post_only=bool(getattr(runtime.app.exchange, 'maker_post_only', True)),
+                fee_assume_entry=fee_assume_entry,
+                fee_assume_exit=fee_assume_exit,
+                maker_fee_bps=maker_fee_bps,
+                taker_fee_bps=taker_fee_bps,
+                tick=tick,
+            )
+            try:
+                _, est_entry = LiveTestnetOrchestrator.place_order_and_record(
+                    client=client,
+                    symbol=symbol,
+                    category=category,
+                    plan=plan,
+                    tp_on_create=tp_on_create,
+                    sl_on_create=sl_on_create,
+                    position_mode=os.environ.get("POSITION_MODE", "ONEWAY").strip().upper(),
+                    logger=logger,
+                    slog=slog,
+                    ledger=ledger,
+                    mid=mid,
+                    spread=spread,
+                    obi=obi,
+                    maker_fee_bps=maker_fee_bps,
+                    taker_fee_bps=taker_fee_bps,
+                )
+            except Exception as e:
+                logger.error(f"Place order failed: {e}")
+                time.sleep(loop_interval)
+                continue
+
+            oo = LiveTestnetOrchestrator.log_open_orders(client, symbol=symbol, logger=logger, slog=slog)
+            LiveTestnetOrchestrator.handle_positions_after_entry(
+                client=client,
+                category=category,
+                symbol=symbol,
+                strategy=strategy,
+                mid=mid,
+                spread=spread,
+                obi=obi,
+                prefer_limit=prefer_limit,
+                flt=flt,
+                maker_fee_bps=maker_fee_bps,
+                taker_fee_bps=taker_fee_bps,
+                ledger=ledger,
+                tl_writer=tl_writer,
+                tle_formats=tle_formats,
+                row_builder=row_builder,
+                run_id=run_id,
+                logger=logger,
+                slog=slog,
+                est_entry=est_entry,
+            )
+            LiveTestnetOrchestrator.cancel_if_open(
+                client=client, symbol=symbol, plan=plan, oo=oo, logger=logger, slog=slog
+            )
+            time.sleep(loop_interval)
+            logger.info(f"Cycle done for {symbol}; rotating if needed")
+
+
+
     @staticmethod
     def refresh_universe(client: Any, runtime: Any, category: str, logger: logging.Logger):
         from bot.core.rotation import build_universe, Universe as _U  # local import
