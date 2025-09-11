@@ -75,7 +75,15 @@ def decide(book: L2Book, cfg: OBFlowConfig) -> Optional[Dict[str, Any]]:
 
     # Pattern B: Wall break (micro tilt and tight spread)
     tight = spr <= max(0.0, mid * cfg.spread_tight_mult_mid)
-    if tight and mic > mid:
+    # Optional TPS gate if feature provided by caller. If absent, do not gate.
+    feat_tps = feat.get("tps")  # ticks-per-second or trade-per-second proxy
+    tps_ok = True
+    try:
+        if feat_tps is not None and float(cfg.tps_min_breakout) > 0:
+            tps_ok = float(feat_tps) >= float(cfg.tps_min_breakout)
+    except Exception:
+        tps_ok = True
+    if tight and mic > mid and tps_ok:
         return {
             "type": "B",
             "side": "BUY",
@@ -83,7 +91,7 @@ def decide(book: L2Book, cfg: OBFlowConfig) -> Optional[Dict[str, Any]]:
             "reason": "micro_above_mid_spread_tight",
             "features": feat,
         }
-    if tight and mic < mid:
+    if tight and mic < mid and tps_ok:
         return {
             "type": "B",
             "side": "SELL",

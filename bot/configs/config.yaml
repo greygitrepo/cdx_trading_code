@@ -12,7 +12,7 @@ risk:
   # 레버리지 상한(러너는 기본 레버리지로 사용)
   max_leverage: 7                  # 기본 7배
   # 1회 주문에 사용할 유효 노셔널 상한(Equity 대비 비율)
-  max_alloc_pct: 0.02              # 2%
+  max_alloc_pct: 0.3              # 2%
   risk_per_trade_min: 0.002        # 0.2%
   risk_per_trade_max: 0.005        # 0.5%
   daily_max_loss: 0.015            # 2% → 1.5% 데일리 컷
@@ -99,8 +99,8 @@ params:
     scanner:
       top_n: 10
       min_15m_turnover_usd: 50000000
-      max_spread_pct: 0.03
-      rv_15m_pct_range: [0.6, 2.5]
+      max_spread_pct: 0.06           # 0.06% (percent units)
+      rv_15m_pct_range: [0.3, 2.5]   # 0.3% ~ 2.5% (percent units)
       min_depth_usd_l10: 300000
     regime:
       adx_len: 14
@@ -111,46 +111,46 @@ params:
       rsi_buy: 8
       bb_len: 20
       bb_std: 2.2
-      vwap_dev_buy_pct: -0.35
+      vwap_dev_buy_pct: -0.35       # -0.35% (percent units)
       ob_bid_min: 0.53
       entry_ttl_sec: 20
-      tp1_pct: 0.20
+      tp1_pct: 0.18                 # 0.18% (percent units)
       tp1_size: 0.60
-      tp2_pct: 0.35
+      tp2_pct: 0.30                 # 0.30% (percent units)
       tp2_size: 0.40
-      sl_pct: 0.25
+      sl_pct: 0.35                  # 0.35% (percent units)
       atr_k_sl: 1.3
-      trail_activate_pct: 0.25
-      trail_gap_pct: 0.15
+      trail_activate_pct: 0.25      # 0.25% (percent units)
+      trail_gap_pct: 0.15           # 0.15% (percent units)
       time_stop_sec: 180
     strategy_B:
       ema_fast: 9
       ema_slow: 21
       above_vwap: true
-      ret1m_min_pct: 0.12
-      ret1m_max_pct: 0.60
+      ret1m_min_pct: 0.12           # 0.12% (percent units)
+      ret1m_max_pct: 0.60           # 0.60% (percent units)
       ob_bid_min: 0.56
       abuy_share_10s_min: 0.60
       taker_entry: true
-      entry_slip_guard_pct: 0.08
-      tp1_pct: 0.40
+      entry_slip_guard_pct: 0.06    # 0.06% (percent units)
+      tp1_pct: 0.35                 # 0.35% (percent units)
       tp1_size: 0.40
-      tp2_pct: 0.60
+      tp2_pct: 0.55                 # 0.55% (percent units)
       tp2_size: 0.60
-      sl_pct: 0.30
+      sl_pct: 0.35                  # 0.35% (percent units)
       atr_k_sl: 1.0
-      trail_after_tp1_pct: 0.20
+      trail_after_tp1_pct: 0.20     # 0.20% (percent units)
       tp_postonly_ttl_sec: 20
       time_stop_sec: 90
 
 # Runtime toggles (runner)
 runtime:
-  # 전략 선택: pack=MIS/VRS/LSR, obflow=OB-Flow
-  strategy: pack
+  # 전략 선택: pack=MIS/VRS/LSR, obflow=OB-Flow apex=APEX
+  strategy: apex
   # 디스커버리/회전
   discover_symbols: true           # 디스커버리 사용 여부
   consensus_ticks: 3               # 진입 전 관찰 틱 수
-  no_trade_sleep_sec: 5.0          # 미진입 시 대기
+  no_trade_sleep_sec: 3.0          # 미진입 시 대기
   loop_idle_sec: 1.0               # 회전 간 간격
   exit_key: "q"                    # 종료 키
   refresh_universe_each_loop: true # 매 루프 유니버스 갱신

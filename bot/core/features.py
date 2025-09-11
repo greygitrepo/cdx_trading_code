@@ -29,14 +29,22 @@ def microprice(book: L2Book) -> float:
     return (pa * vb + pb * va) / den
 
 def depth_imbalance(book: L2Book, levels: int = 5) -> float:
-    bb = book.best_bid()
-    ba = book.best_ask()
-    if not bb or not ba:
+    """Compute top-N depth imbalance using L2 levels.
+
+    Returns (sum_bid_sizes - sum_ask_sizes) / (sum_bid_sizes + sum_ask_sizes).
+
+    Falls back to 0.0 if either side has no liquidity or denominator is 0.
+    """
+    bids, asks = book.copy_levels()
+    if not bids or not asks:
         return 0.0
-    vb = max(bb[1], 0.0)
-    va = max(ba[1], 0.0)
-    den = (vb + va) or 1.0
-    return (vb - va) / den
+    # Sum top-N by price priority
+    sum_b = sum(max(sz, 0.0) for _, sz in bids[: max(1, int(levels))])
+    sum_a = sum(max(sz, 0.0) for _, sz in asks[: max(1, int(levels))])
+    den = sum_b + sum_a
+    if den <= 0:
+        return 0.0
+    return (sum_b - sum_a) / den
 
 def ofi_l1(
     prev_bb: Tuple[float, float] | None,
