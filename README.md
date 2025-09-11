@@ -171,6 +171,32 @@ python bot/scripts/run_live_testnet.py --profile mainnet
 ### 트레이드 상태 헬퍼
 `bot/core/execution/trade_state.py`는 부분청산, TP1 이후 트레일, 타임스탑, 쿨다운(라이브/시뮬 공용)을 제공합니다.
 
+## Runner 구조(정리)
+
+런타임 러너가 `bot/app/runners`에 정리되었습니다. 스크립트는 얇은 래퍼로 러너를 호출합니다.
+
+- LiveTestnetRunner
+  - `run_main(args)`: .env 로드 → 로깅 → 전략 오버라이드/프로파일 오버레이 → 전략 헤더 이벤트 기록 → 수수료/클라이언트 준비 → `run_loop(...)` 실행
+  - `run_loop(...)`: 유니버스 회전, 오더북 파싱, 레짐 게이트, 전략 결정(OBF/pack), 주문 계획/리스크/전송, 포지션 후처리(부분청산/트레일/타임스탑), 스모크 취소
+- LiveTestnetOrchestrator: 위 단계의 세부 함수들(테스트 용이성 향상/가독성 개선)
+
+엔트리 스크립트
+- `bot/scripts/run_live_testnet.py`: 기본 엔트리. 현재는 `LiveTestnetRunner.run_main(...)`만 호출(Actor 모드 제외)합니다.
+- `bot/scripts/run_live_testnet_obflow.py`: OB-Flow 전용 래퍼. 내부적으로 `--strategy obflow`로 `run_main`을 호출합니다.
+
+실행 예시
+```bash
+# 기본(프로파일/전략 지정)
+python bot/scripts/run_live_testnet.py --profile quick-test --strategy obflow
+
+# OB-Flow 전용 래퍼(동일 동작)
+python bot/scripts/run_live_testnet_obflow.py --profile quick-test
+
+# 전략 파라미터 CLI 오버라이드
+python bot/scripts/run_live_testnet.py --strategy obflow \
+  --strategy-param depth_imb_L5_min=0.25 --strategy-param spread_tight_mult_mid=0.0007
+```
+
 ### 퀵-테스트 프로파일(테스트넷 빠른 체결)
 
 테스트넷에서 라이브 배선을 빠르게 검증하고 다수 체결을 유도하려면:
