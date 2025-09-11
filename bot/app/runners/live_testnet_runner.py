@@ -949,6 +949,45 @@ class LiveTestnetRunner:
                 time.sleep(loop_interval)
                 continue
 
+            # Risk feasibility pre-checks to avoid repeated blocks
+            try:
+                cap = float(getattr(runtime.app.risk, 'max_alloc_pct', 0.02)) * float(equity)
+                allowed_gross = float(cap) * float(leverage)
+            except Exception:
+                cap = 0.0
+                allowed_gross = 0.0
+            # 1) If min order notional exceeds allowed gross, skip this symbol
+            try:
+                min_qty = float(flt.get("minOrderQty") or 0.0)
+                min_gross = float(min_qty) * float(mid)
+                if allowed_gross > 0 and min_gross > allowed_gross:
+                    logger.info(
+                        f"Skip: min order ${min_gross:.2f} > allowed ${allowed_gross:.2f} (cap={cap:.2f}, lev={leverage})"
+                    )
+                    try:
+                        slog.log_why_no_trade(
+                            ts=int(time.time() * 1000),
+                            symbol=symbol,
+                            reasons=["min_order_exceeds_cap"],
+                            context={"min_gross": min_gross, "allowed_gross": allowed_gross, "cap": cap, "lev": leverage},
+                        )
+                    except Exception:
+                        pass
+                    time.sleep(loop_interval)
+                    continue
+            except Exception:
+                pass
+            # 2) Adjust fixed notional per-iteration if it would exceed allowed gross
+            fixed_notional_eff = fixed_notional
+            try:
+                if float(fixed_notional) > 0 and allowed_gross > 0 and float(fixed_notional) > allowed_gross:
+                    fixed_notional_eff = max(0.0, allowed_gross * 0.98)
+                    logger.info(
+                        f"Adjust fixed notional: {fixed_notional:.2f} -> {fixed_notional_eff:.2f} (allowed_gross={allowed_gross:.2f})"
+                    )
+            except Exception:
+                pass
+
             # Spread-based regime pause
             if spr_pause_mult > 0 and spread >= spr_thresh * spr_pause_mult:
                 logger.info(f"Spread too wide; pause: spread={spread:.6f}")
@@ -1061,7 +1100,7 @@ class LiveTestnetRunner:
                 flt=flt,
                 prefer_limit=prefer_limit,
                 post_only=prefer_limit and _env_bool("MAKER_POST_ONLY", True),
-                fixed_notional=fixed_notional,
+                fixed_notional=fixed_notional_eff,
                 logger=logger,
                 slog=slog,
             )
