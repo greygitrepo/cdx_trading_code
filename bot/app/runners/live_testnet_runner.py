@@ -564,7 +564,7 @@ class LiveTestnetOrchestrator:
                 ledger.update_mfe_mae(symbol, now_price=mid)
             except Exception:
                 pass
-            # Trailing stop after entry
+            # Trailing stop after entry (defer arming until in-profit if configured)
             try:
                 # Clear existing trailing first
                 try:
@@ -603,20 +603,31 @@ class LiveTestnetOrchestrator:
                 except Exception:
                     trail_pct = float(os.environ.get("SL_PCT", 0.0020))
                 trailing_abs2 = round(avg_price * trail_pct, 4)
+
+                # Optional defer: arm trailing only after price moves in favor by trail_pct (default behavior)
+                defer_trail = os.environ.get("ARM_TRAIL_ONLY_AFTER_PROFIT", "true").strip().lower() == "true"
+                move = ((mid - avg_price) / avg_price) if side_long else ((avg_price - mid) / avg_price)
+                arm_trail_now = (not defer_trail) or (move >= trail_pct)
+
                 try:
                     client.set_trading_stop(
                         symbol=symbol,
-                        trailingStop=trailing_abs2,
+                        trailingStop=(trailing_abs2 if arm_trail_now else ""),
                         takeProfit=tp_abs2,
                         stopLoss=sl_abs2,
                         category=category,
                         positionIdx=_position_idx_for_side(side_long, _position_mode()),
                     )
-                    logger.info(
-                        f"Applied trailing stop after entry: tp={tp_abs2:.6f} sl={sl_abs2:.6f} trail={trailing_abs2:.6f}"
-                    )
+                    if arm_trail_now:
+                        logger.info(
+                            f"Applied trailing stop after entry: tp={tp_abs2:.6f} sl={sl_abs2:.6f} trail={trailing_abs2:.6f}"
+                        )
+                    else:
+                        logger.info(
+                            f"Deferred trail (armed after +{trail_pct:.6f}): tp={tp_abs2:.6f} sl={sl_abs2:.6f}"
+                        )
                     try:
-                        ledger.set_stops(symbol, tp_abs=tp_abs2, sl_abs=sl_abs2, trail_abs=trailing_abs2)
+                        ledger.set_stops(symbol, tp_abs=tp_abs2, sl_abs=sl_abs2, trail_abs=(trailing_abs2 if arm_trail_now else None))
                     except Exception:
                         pass
                 except Exception as e:

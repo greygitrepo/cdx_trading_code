@@ -65,7 +65,7 @@ params:
     # 스프레드가 mid 대비 이 값 이하일 때 ‘타이트’로 간주
     spread_tight_mult_mid: 0.0010
     # B패턴 히스테리시스: |micro-mid|/spread 하한 (뒤집힘 완화)
-    b_micro_dev_mult_spread_min: 0.35
+    b_micro_dev_mult_spread_min: 0.4
     # 돌파 패턴용 TPS(틱/초) 임계
     tps_min_breakout: 10.0
     # 흡수 후 반전 강도 임계
