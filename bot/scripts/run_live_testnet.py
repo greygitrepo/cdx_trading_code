@@ -60,6 +60,7 @@ try:
         write_event,
         require_env_flags,
         load_dotenv_if_present,
+        LiveTestnetOrchestrator,
     )
 except Exception:  # pragma: no cover - fallback for direct script runs
     _ROOT = _P(__file__).resolve().parents[2]
@@ -95,6 +96,7 @@ except Exception:  # pragma: no cover - fallback for direct script runs
         write_event,
         require_env_flags,
         load_dotenv_if_present,
+        LiveTestnetOrchestrator,
     )
     from bot.app.runners.live_runner import LiveRunner
     from bot.app.wiring import AppContext as _AppCtx
@@ -192,7 +194,7 @@ def main() -> None:
     run_id = f"run_{_dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
     logger, logs_dir = setup_loggers(run_id)
     # Load .env if present (no override)
-    n_loaded = _load_dotenv_if_present()
+    n_loaded = load_dotenv_if_present()
     if n_loaded:
         logger.info(f"Loaded {n_loaded} vars from .env")
     slog = StructLogger(logs_dir, run_id)
@@ -228,96 +230,16 @@ def main() -> None:
     except Exception:
         pass
     # Build and write strategy header for reproducibility
-    try:
-        header = LiveRunner.build_header(app_ctx=None, config=runtime.app)
-        write_event(
-            logs_dir,
-            {
-                "ts": int(time.time() * 1000),
-                "run_id": run_id,
-                "step": "run_header",
-                "strategy_name": header.strategy_name,
-                "strategy_cfg_hash": header.strategy_cfg_hash,
-                "strategy_params": header.params,
-            },
-        )
-    except Exception:
-        pass
-    def _export_resolved_from_yaml() -> None:
-        resolved: dict[str, str | float | int | bool] = {}
-        warnings: list[dict] = []
-        # Map selected keys
-        try:
-            ee = runtime.params.entry_exit
-            ob = runtime.params.orderbook
-            fu = runtime.params.funding_time
-            ex = runtime.app.exchange
-            uv = runtime.params.universe
-            mapping: list[tuple[str, object]] = [
-                ("TP_PCT", ee.tp1),
-                ("SL_PCT", ee.sl),
-                ("TRAIL_AFTER_TP1_PCT", ee.trail_after_tp1),
-                ("MIN_DEPTH_USD", ob.min_depth_usd),
-                ("AVOID_TAKER_WITHIN_MIN", fu.avoid_taker_within_min),
-                ("PREFER_LIMIT_DEFAULT", bool(ex.maker_post_only)),
-                ("DYNAMIC_TAKER_ON_STRONG", bool(ex.taker_on_strong_score)),
-                ("FALLBACK_IOC", bool(ex.fallback_ioc)),
-                ("UNIVERSE_TOP_N", uv.topN),
-                ("BYBIT_CATEGORY", ex.category),
-                # Keep REST base (testnet/mainnet) in sync with YAML network
-                ("TESTNET", "true" if str(getattr(ex, "network", "testnet")).lower() == "testnet" else "false"),
-            ]
-            for key, yval in mapping:
-                ystr = str(yval).lower() if isinstance(yval, bool) else str(yval)
-                prev = os.environ.get(key)
-                if prev is not None and prev != ystr:
-                    warnings.append({"key": key, "env": prev, "yaml": ystr})
-                os.environ[key] = ystr
-                resolved[key] = yval
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"config:resolved export failed: {e}")
-        if warnings:
-            logger.warning(f"config:resolved conflicts: {warnings}")
-            try:
-                from bot.utils.structlog import BaseEvent
-                # emit conflict event
-                for w in warnings:
-                    slog.log_info(ts=int(time.time()*1000), symbol=None, tag="config:conflict", payload=w)  # type: ignore[arg-type]
-            except Exception:
-                pass
-        # Dump resolved
-        try:
-            slog.log_info(ts=int(time.time() * 1000), symbol=None, tag="config:resolved", payload=resolved)  # type: ignore[arg-type]
-        except Exception:
-            logger.info(f"config:resolved {resolved}")
-
-    _export_resolved_from_yaml()
+    LiveTestnetOrchestrator.emit_strategy_header(runtime.app, logs_dir, run_id)
+    LiveTestnetOrchestrator.export_resolved_from_yaml(runtime, logger, slog)
     # Load profile config if requested (pure YAML overlay; then re-export to ENV)
     if args.profile:
         try:
             prof_name = "quick_test" if args.profile == "quick-test" else args.profile
             prof_path = _P(f"bot/configs/profiles/{prof_name}.yaml")
             if prof_path.exists():
-                with prof_path.open("r", encoding="utf-8") as f:
-                    overlay = yaml.safe_load(f) or {}
-                # Shallow merge into runtime models (exchange/risk/params/runtime)
-                def _merge_obj(obj, ov):
-                    for k, v in (ov or {}).items():
-                        if hasattr(obj, k) and not isinstance(v, dict):
-                            setattr(obj, k, v)
-                        elif hasattr(obj, k) and isinstance(v, dict):
-                            _merge_obj(getattr(obj, k), v)
-                if overlay.get("exchange"):
-                    _merge_obj(runtime.app.exchange, overlay.get("exchange"))
-                if overlay.get("risk"):
-                    _merge_obj(runtime.app.risk, overlay.get("risk"))
-                if overlay.get("params"):
-                    _merge_obj(runtime.params, overlay.get("params"))
-                if overlay.get("runtime"):
-                    _merge_obj(runtime.app.runtime, overlay.get("runtime"))
-                logger.info(f"Applied profile overlay: {args.profile}")
-                # Re-export resolved values after overlay (keeps TESTNET/category in sync)
-                _export_resolved_from_yaml()
+                if LiveTestnetOrchestrator.apply_profile_overlay(runtime, args.profile, logger):
+                    LiveTestnetOrchestrator.export_resolved_from_yaml(runtime, logger, slog)
             else:
                 logger.warning(f"Profile not found: {prof_path}")
         except Exception as e:  # noqa: BLE001
