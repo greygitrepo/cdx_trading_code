@@ -32,6 +32,8 @@ class OBFlowConfig:
     c_absorption_min: float = 0.35
     d_wide_spread_mult_mid: float = 0.0015
     d_micro_dev_mult_spread: float = 0.40
+    # New: B-pattern hysteresis — require micro to deviate from mid by X multiples of spread
+    b_micro_dev_mult_spread_min: float = 0.30
 
     @staticmethod
     def from_params(params: Any) -> "OBFlowConfig":  # type: ignore[type-arg]
@@ -45,6 +47,7 @@ class OBFlowConfig:
             c_absorption_min=float(getattr(p, "c_absorption_min", 0.35)),
             d_wide_spread_mult_mid=float(getattr(p, "d_wide_spread_mult_mid", 0.0015)),
             d_micro_dev_mult_spread=float(getattr(p, "d_micro_dev_mult_spread", 0.40)),
+            b_micro_dev_mult_spread_min=float(getattr(p, "b_micro_dev_mult_spread_min", 0.30)),
         )
 
 
@@ -83,7 +86,14 @@ def decide(book: L2Book, cfg: OBFlowConfig) -> Optional[Dict[str, Any]]:
             tps_ok = float(feat_tps) >= float(cfg.tps_min_breakout)
     except Exception:
         tps_ok = True
-    if tight and mic > mid and tps_ok:
+    # Hysteresis: require micro to deviate sufficiently from mid relative to current spread
+    dev_ok = False
+    try:
+        if spr > 0:
+            dev_ok = (abs(mic - mid) / spr) >= max(0.0, float(cfg.b_micro_dev_mult_spread_min))
+    except Exception:
+        dev_ok = False
+    if tight and dev_ok and mic > mid and tps_ok:
         return {
             "type": "B",
             "side": "BUY",
@@ -91,7 +101,7 @@ def decide(book: L2Book, cfg: OBFlowConfig) -> Optional[Dict[str, Any]]:
             "reason": "micro_above_mid_spread_tight",
             "features": feat,
         }
-    if tight and mic < mid and tps_ok:
+    if tight and dev_ok and mic < mid and tps_ok:
         return {
             "type": "B",
             "side": "SELL",

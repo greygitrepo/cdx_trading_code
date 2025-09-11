@@ -95,6 +95,8 @@ class OBFlowParams(BaseModel):
     c_absorption_min: float = 0.5
     d_wide_spread_mult_mid: float = 0.0025
     d_micro_dev_mult_spread: float = 0.65
+    # B-pattern hysteresis: require |micro-mid|/spread >= this value
+    b_micro_dev_mult_spread_min: float = 0.30
 
 
 class ExecutionRoutingParams(BaseModel):
