@@ -63,7 +63,7 @@ params:
     # L5 불균형 기준 (절대값이 클수록 한쪽 벽이 강함)
     depth_imb_L5_min: 0.3
     # 스프레드가 mid 대비 이 값 이하일 때 ‘타이트’로 간주
-    spread_tight_mult_mid: 0.0006
+    spread_tight_mult_mid: 0.0010
     # 돌파 패턴용 TPS(틱/초) 임계
     tps_min_breakout: 8.0
     # 흡수 후 반전 강도 임계

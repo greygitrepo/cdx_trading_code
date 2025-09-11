@@ -787,6 +787,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 class LiveTestnetRunner:
     _tps_state: dict[str, tuple[int, float]] = {}
+    _consensus_state: dict[str, dict[str, int]] = {}
     """Encapsulates the main rotation loop for run_live_testnet.
 
     This runner stitches together the orchestrator helpers into a cohesive loop,
@@ -913,6 +914,33 @@ class LiveTestnetRunner:
                 if signal is None:
                     time.sleep(loop_interval)
                     continue
+                # Debounce/consensus: require same signal for N consecutive ticks
+                try:
+                    need = max(1, int(getattr(runtime.app.runtime, 'consensus_ticks', 1)))
+                except Exception:
+                    need = 1
+                if need > 1:
+                    st = LiveTestnetRunner._consensus_state.get(symbol) or {"side": 0, "count": 0}
+                    if int(st.get("side", 0)) == int(signal):
+                        st["count"] = int(st.get("count", 0)) + 1
+                    else:
+                        st["side"] = int(signal)
+                        st["count"] = 1
+                    LiveTestnetRunner._consensus_state[symbol] = st
+                    have = int(st.get("count", 0))
+                    if have < need:
+                        try:
+                            slog.log_why_no_trade(
+                                ts=int(time.time() * 1000),
+                                symbol=symbol,
+                                reasons=["consensus_wait"],
+                                context={"have": have, "need": need, "signal": int(signal)},
+                            )
+                        except Exception:
+                            pass
+                        logger.info(f"OB-Flow consensus {have}/{need}; waiting")
+                        time.sleep(loop_interval)
+                        continue
             elif strategy == "apex":
                 sig, _apx_ctx = LiveTestnetOrchestrator.decide_apex_signal(
                     symbol=symbol, mid=mid, spread=spread, obi=obi, runtime=runtime, logger=logger, slog=slog
