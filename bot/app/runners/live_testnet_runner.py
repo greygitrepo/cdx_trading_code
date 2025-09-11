@@ -148,7 +148,8 @@ class LiveTestnetOrchestrator:
     def decide_obflow_signal(*, symbol: str, mid: float, spread: float, bid_sz: float, ask_sz: float,
                              obi: float, ob_cfg: Any, logger: logging.Logger, slog: Any,
                              levels_b: list[tuple[float, float]] | None = None,
-                             levels_a: list[tuple[float, float]] | None = None) -> tuple[int | None, dict, dict | None]:
+                             levels_a: list[tuple[float, float]] | None = None,
+                             tps: float | None = None) -> tuple[int | None, dict, dict | None]:
         from bot.core.book import L2Book  # local import
         from bot.core.features import basic_snapshot  # local import
         from bot.core.signals.obflow import decide as obflow_decide  # local import
@@ -164,6 +165,12 @@ class LiveTestnetOrchestrator:
                 # Fallback: synthesize top level from mid/spread
                 b.bids[mid - spread / 2] = bid_sz or 1.0  # type: ignore[index]
                 b.asks[mid + spread / 2] = ask_sz or 1.0  # type: ignore[index]
+        except Exception:
+            pass
+        # Inject optional TPS into feature set consumed by basic_snapshot
+        try:
+            if tps is not None:
+                setattr(b, "extra_features", {"tps": float(tps)})
         except Exception:
             pass
         feat = basic_snapshot(b)
@@ -779,6 +786,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 class LiveTestnetRunner:
+    _tps_state: dict[str, tuple[int, float]] = {}
     """Encapsulates the main rotation loop for run_live_testnet.
 
     This runner stitches together the orchestrator helpers into a cohesive loop,
@@ -900,6 +908,7 @@ class LiveTestnetRunner:
                     slog=slog,
                     levels_b=ob_ctx.get("levels_b"),
                     levels_a=ob_ctx.get("levels_a"),
+                    tps=ob_ctx.get("tps"),
                 )
                 if signal is None:
                     time.sleep(loop_interval)
@@ -1337,6 +1346,7 @@ class LiveTestnetRunner:
             pass
         parse_ok = False
         mid = spread = bid_sz = ask_sz = obi = 0.0
+        tps = None
         try:
             bids = ob["result"]["b"] if ob.get("result") and ob["result"].get("b") else []
             asks = ob["result"]["a"] if ob.get("result") and ob["result"].get("a") else []
@@ -1353,6 +1363,23 @@ class LiveTestnetRunner:
             # Prepare full depth levels (floats) up to requested depth
             levels_b = [(float(p), float(s)) for p, s in (bids[:ob_depth] if isinstance(bids, list) else [])]
             levels_a = [(float(p), float(s)) for p, s in (asks[:ob_depth] if isinstance(asks, list) else [])]
+            # TPS estimation using Bybit sequence if available
+            res = ob.get("result", {})
+            seq = None
+            try:
+                # Prefer 'seq' if present, else 'u'
+                seq = int(res.get("seq") or res.get("u"))
+            except Exception:
+                seq = None
+            if seq is not None:
+                now = time.time()
+                prev = LiveTestnetRunner._tps_state.get(symbol)
+                if prev is not None:
+                    prev_seq, prev_ts = prev
+                    dseq = max(0, int(seq) - int(prev_seq))
+                    dt = max(1e-3, now - float(prev_ts))
+                    tps = float(dseq) / dt
+                LiveTestnetRunner._tps_state[symbol] = (int(seq), now)
         except Exception as e:
             logger.info(f"Failed to parse orderbook (fallback to ticker): {e}")
             try:
@@ -1380,6 +1407,7 @@ class LiveTestnetRunner:
             "raw": ob,
             "levels_b": locals().get("levels_b") or [],
             "levels_a": locals().get("levels_a") or [],
+            "tps": tps,
         }
 
     @staticmethod

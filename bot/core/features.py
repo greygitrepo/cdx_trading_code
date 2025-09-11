@@ -67,9 +67,17 @@ def ofi_l1(
 
 def basic_snapshot(book: L2Book) -> Dict[str, float]:
     mid, spr = mid_spread(book)
-    return {
+    feat: Dict[str, float] = {
         "mid": mid,
         "spread": spr,
         "micro": microprice(book),
         "imb_l5": depth_imbalance(book, 5),
     }
+    # Allow callers to inject additional lightweight features (e.g., TPS)
+    extra = getattr(book, "extra_features", None)
+    if isinstance(extra, dict):
+        try:
+            feat.update({k: float(v) for k, v in extra.items()})
+        except Exception:
+            pass
+    return feat
