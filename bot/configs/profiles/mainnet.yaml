@@ -4,7 +4,7 @@ exchange:
   category: linear
 
 risk:
-  max_leverage: 5
+  max_leverage: 7
   max_alloc_pct: 1.0
   min_free_balance_usdt: 1
 

@@ -788,6 +788,11 @@ def _env_bool(name: str, default: bool) -> bool:
 class LiveTestnetRunner:
     _tps_state: dict[str, tuple[int, float]] = {}
     _consensus_state: dict[str, dict[str, int]] = {}
+    _ins_cache: dict[str, tuple[float, dict]] = {}  # key=category
+    _filters_cache: dict[tuple[str, str], tuple[float, dict]] = {}  # key=(category,symbol)
+    _lev_set: set[tuple[str, str]] = set()  # (category,symbol)
+    _pos_cache: dict[str, tuple[float, dict]] = {}  # key=symbol
+    _oo_cache: dict[str, tuple[float, dict]] = {}   # key=symbol
     """Encapsulates the main rotation loop for run_live_testnet.
 
     This runner stitches together the orchestrator helpers into a cohesive loop,
@@ -832,10 +837,15 @@ class LiveTestnetRunner:
         except Exception:
             equity = 0.0
 
+        last_uni_refresh = 0.0
+        uni_ttl = float(os.environ.get("UNIVERSE_REFRESH_SEC", "60").split("#",1)[0] or 60)
         while not exit_flag.check():
             try:
                 if bool(getattr(runtime.app.runtime, 'refresh_universe_each_loop', True)):
-                    uni = LiveTestnetRunner.refresh_universe(client, runtime, category, logger)
+                    now = time.time()
+                    if (now - last_uni_refresh) >= max(1.0, uni_ttl):
+                        uni = LiveTestnetRunner.refresh_universe(client, runtime, category, logger)
+                        last_uni_refresh = now
             except Exception:
                 pass
 
@@ -847,7 +857,10 @@ class LiveTestnetRunner:
             idx += 1
 
             flt = LiveTestnetRunner.load_instrument_filters(client, category, symbol, logger)
-            LiveTestnetRunner.set_leverage(client, symbol, leverage, category, logger)
+            # Set leverage only once per symbol/category per run
+            if (category, symbol) not in LiveTestnetRunner._lev_set:
+                LiveTestnetRunner.set_leverage(client, symbol, leverage, category, logger)
+                LiveTestnetRunner._lev_set.add((category, symbol))
 
             # Regime checks (spread pause)
             try:
@@ -1333,9 +1346,22 @@ class LiveTestnetRunner:
 
     @staticmethod
     def load_instrument_filters(client: Any, category: str, symbol: str, logger: logging.Logger) -> dict:
+        ttl = float(os.environ.get("INSTRUMENT_TTL_SEC", "300").split("#",1)[0] or 300)
+        key_cat = category or "linear"
+        key = (key_cat, symbol)
+        now = time.time()
         try:
-            ins = client.get_instruments(category=category)
-            flt = client.extract_symbol_filters(ins, symbol)
+            # Use cached filters if fresh
+            t_flt, flt_cached = LiveTestnetRunner._filters_cache.get(key, (0.0, {}))
+            if flt_cached and (now - t_flt) < max(5.0, ttl):
+                return flt_cached
+            # Refresh instruments list per category with TTL
+            t_ins, ins_cached = LiveTestnetRunner._ins_cache.get(key_cat, (0.0, {}))
+            if not ins_cached or (now - t_ins) >= max(5.0, ttl):
+                ins_cached = client.get_instruments(category=key_cat)
+                LiveTestnetRunner._ins_cache[key_cat] = (now, ins_cached)
+            flt = client.extract_symbol_filters(ins_cached, symbol)
+            LiveTestnetRunner._filters_cache[key] = (now, flt)
             logger.info(
                 f"Instrument filters for {symbol}: tickSize={flt.get('tickSize')} qtyStep={flt.get('qtyStep')} minQty={flt.get('minOrderQty')}"
             )
@@ -1441,7 +1467,13 @@ class LiveTestnetRunner:
     @staticmethod
     def should_skip_for_open_position_or_orders(client: Any, *, category: str, symbol: str, logger: logging.Logger, slog: Any, loop_interval: float) -> bool:
         try:
-            pos = client.get_position_info(category=category, symbol=symbol)
+            # Cache positions and open orders briefly to reduce API churn
+            ttl = float(os.environ.get("POS_OO_TTL_SEC", "2").split("#",1)[0] or 2)
+            now = time.time()
+            t_pos, pos = LiveTestnetRunner._pos_cache.get(symbol, (0.0, {}))
+            if not pos or (now - t_pos) >= max(0.5, ttl):
+                pos = client.get_position_info(category=category, symbol=symbol)
+                LiveTestnetRunner._pos_cache[symbol] = (now, pos)
             long_size = 0.0
             short_size = 0.0
             try:
@@ -1459,7 +1491,10 @@ class LiveTestnetRunner:
                 time.sleep(loop_interval)
                 return True
             try:
-                oo = client.get_open_orders(symbol=symbol)
+                t_oo, oo = LiveTestnetRunner._oo_cache.get(symbol, (0.0, {}))
+                if not oo or (now - t_oo) >= max(0.5, ttl):
+                    oo = client.get_open_orders(symbol=symbol)
+                    LiveTestnetRunner._oo_cache[symbol] = (now, oo)
                 raw_list = oo.get("result", {}).get("list", []) or []
                 open_states = {"New", "PartiallyFilled", "Untriggered"}
                 olist = []
