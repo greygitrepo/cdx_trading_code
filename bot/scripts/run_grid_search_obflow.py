@@ -49,6 +49,8 @@ def main() -> None:
     ap.add_argument("--assume-entry", default="auto", choices=["auto", "maker", "taker"])
     ap.add_argument("--assume-exit", default="taker", choices=["maker", "taker"])
     ap.add_argument("--preset", default="yaml", choices=["yaml", "default", "loose"])
+    ap.add_argument("--qty-usdt", type=float, default=50.0)
+    ap.add_argument("--depth", type=int, default=1)
     args = ap.parse_args()
 
     tp_list = [max(0.0, float(x) / 1e4) for x in str(args.tp_bps).split(",") if x.strip()]
@@ -63,6 +65,8 @@ def main() -> None:
         assume_entry=str(args.assume_entry),
         assume_exit=str(args.assume_exit),
         preset=str(args.preset),
+        qty_usdt=float(args.qty_usdt),
+        depth=int(args.depth),
     )
     csv_path = runner.run()
     print(f"CSV: {csv_path}")
