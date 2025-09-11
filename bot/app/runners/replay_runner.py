@@ -23,6 +23,7 @@ class ReplayConfig:
     symbol: str = "BTCUSDT"
     max_sec: float = 60.0
     qty_usdt: float = 50.0
+    depth: int = 1
     out_path: Optional[Path] = None
 
 
@@ -37,7 +38,7 @@ class ReplayRunner:
     def run(self) -> dict:
         runtime = load_runtime()
         ob_cfg = OBFlowConfig.from_params(runtime.params)
-        ws = PublicWS(symbol=self.cfg.symbol, depth=1)
+        ws = PublicWS(symbol=self.cfg.symbol, depth=int(self.cfg.depth))
         book = L2Book(symbol=self.cfg.symbol)
 
         cooldown = Cooldown(max_consecutive_losses=2, cooldown_sec=120)
@@ -55,6 +56,8 @@ class ReplayRunner:
         out = ev_path.open("w")
 
         start = time.time()
+        prev_seq: int | None = None
+        prev_ts_ms: int | None = None
         for ev in ws.orderbook_stream():
             if (time.time() - start) >= self.cfg.max_sec:
                 break
@@ -81,6 +84,20 @@ class ReplayRunner:
 
             now_sec = int(time.time())
             px = self._micro(book)
+            # Inject TPS estimate for parity with live OB-Flow B gate
+            try:
+                seq = int(ev.get("seq") or 0)
+                ts_ms = int(ev.get("ts") or 0)
+                tps = None
+                if prev_seq is not None and prev_ts_ms is not None and seq >= prev_seq:
+                    dseq = seq - prev_seq
+                    dt = max(1, int((ts_ms - prev_ts_ms) / 1000))
+                    tps = float(dseq) / float(dt)
+                prev_seq, prev_ts_ms = seq, ts_ms
+                if tps is not None:
+                    setattr(book, "extra_features", {"tps": float(tps)})
+            except Exception:
+                pass
 
             if state is not None and pos_side is not None and pos_qty > 0.0:
                 acts = state.update(px=px, now_ts=now_sec)
