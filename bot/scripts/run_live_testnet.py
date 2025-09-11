@@ -55,6 +55,12 @@ try:
     from bot.core.order_router import OrderRouter
     from bot.core.market_data_hub import MarketDataHub
     from bot.actors.symbol_actor import SymbolActor
+    from bot.app.runners.live_testnet_runner import (
+        setup_loggers,
+        write_event,
+        require_env_flags,
+        load_dotenv_if_present,
+    )
 except Exception:  # pragma: no cover - fallback for direct script runs
     _ROOT = _P(__file__).resolve().parents[2]
     if str(_ROOT) not in sys.path:
@@ -84,6 +90,12 @@ except Exception:  # pragma: no cover - fallback for direct script runs
     from bot.core.market_data_hub import MarketDataHub
     from bot.actors.symbol_actor import SymbolActor
     from bot.core.ledger import TradeLedger
+    from bot.app.runners.live_testnet_runner import (
+        setup_loggers,
+        write_event,
+        require_env_flags,
+        load_dotenv_if_present,
+    )
     from bot.app.runners.live_runner import LiveRunner
     from bot.app.wiring import AppContext as _AppCtx
 
@@ -103,147 +115,7 @@ except Exception:
     TradeLedgerRow = None  # type: ignore
 
 
-def setup_loggers(run_id: str) -> tuple[logging.Logger, _P]:
-    base_logs = _P("logs")
-    base_logs.mkdir(parents=True, exist_ok=True)
-    # Run-scoped directory
-    logs_dir = init_run_dir(base_logs, run_id)
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("live_testnet")
-    logger.setLevel(logging.INFO)
-    # Rotating file handler (simple size-based)
-    fh = logging.FileHandler(logs_dir / "app.log")
-    fh.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    fh.setFormatter(fmt)
-    if not logger.handlers:
-        logger.addHandler(fh)
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setLevel(logging.INFO)
-        sh.setFormatter(fmt)
-        logger.addHandler(sh)
-    return logger, logs_dir
-
-
-def write_event(logs_dir: _P, event: dict[str, Any]) -> None:
-    # Back-compat raw writer (kept if external callers rely on it)
-    fp = logs_dir / "events.jsonl"
-    with fp.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-
-def require_env_flags(logger: logging.Logger) -> None:
-    flags = {
-        "STUB_MODE": os.environ.get("STUB_MODE", "false").lower(),
-        "PAPER_MODE": os.environ.get("PAPER_MODE", "false").lower(),
-        "LIVE_MODE": os.environ.get("LIVE_MODE", "true").lower(),
-        "TESTNET": os.environ.get("TESTNET", "true").lower(),
-    }
-    logger.info(f"Env flags: {flags}")
-    # if flags["LIVE_MODE"] != "true" or flags["TESTNET"] != "true":
-    #     logger.error(
-    #         "Safety check: run_live_testnet requires LIVE_MODE=true and TESTNET=true. Exiting."
-    #     )
-    #     sys.exit(1)
-
-
-def _load_dotenv_if_present() -> int:
-    """Lightweight .env loader to ease local runs (no external deps).
-
-    Loads key=value pairs from repo-root `.env` if present. Does not override already-set env vars.
-    Returns number of variables loaded.
-    """
-    try:
-        env_fp = _P(__file__).resolve().parents[2] / ".env"
-    except Exception:
-        return 0
-    if not env_fp.exists():
-        return 0
-    loaded = 0
-    for line in env_fp.read_text(encoding="utf-8").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#") or "=" not in s:
-            continue
-        k, v = s.split("=", 1)
-        k = k.strip()
-        v = v.strip()
-        if "#" in v:
-            v = v.split("#", 1)[0].strip()
-        if k and (k not in os.environ):
-            os.environ[k] = v
-            loaded += 1
-    return loaded
-
-
-def _apply_profile_env(profile: str) -> None:
-    # Load overlay YAML and map key settings to envs the runner uses.
-    # Priority: CLI overrides > profile overlay > base env
-    prof_path = _P(
-        f"bot/configs/profiles/{'quick_test' if profile == 'quick-test' else profile}.yaml"
-    )
-    if not prof_path.exists():
-        return
-    with prof_path.open("r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-
-    # Exchange/network
-    net = (cfg.get("exchange", {}) or {}).get("network")
-    if net:
-        os.environ.setdefault(
-            "TESTNET", "true" if str(net).lower() == "testnet" else "false"
-        )
-    maker_post = (cfg.get("exchange", {}) or {}).get("maker_post_only")
-    if maker_post is not None:
-        os.environ.setdefault("MAKER_POST_ONLY", str(bool(maker_post)).lower())
-    taker_on = (cfg.get("exchange", {}) or {}).get("taker_on_strong_score")
-    if taker_on is not None:
-        os.environ.setdefault("TAKER_ON_STRONG_SCORE", str(bool(taker_on)).lower())
-    fallback_ioc = (cfg.get("exchange", {}) or {}).get("fallback_ioc")
-    if fallback_ioc is not None:
-        os.environ.setdefault("FALLBACK_IOC", str(bool(fallback_ioc)).lower())
-
-    # Params overlays
-    params = cfg.get("params", {}) or {}
-    orderbook = params.get("orderbook", {}) or {}
-    if "min_depth_usd" in orderbook:
-        os.environ.setdefault("MIN_DEPTH_USD", str(orderbook["min_depth_usd"]))
-    regime = params.get("regime", {}) or {}
-    if "strictness" in regime:
-        os.environ.setdefault("REGIME_STRICTNESS", str(regime["strictness"]))
-
-    # indicators/universe overlays reserved for strategy layer; ignored here
-    # Quick-test: disable discovery by default
-    if profile == "quick-test":
-        os.environ.setdefault("DISCOVER_SYMBOLS", "false")
-
-    # Entry/exit
-    ex = cfg.get("entry_exit", {}) or {}
-    if "tp1" in ex:
-        os.environ.setdefault("TP_PCT", str(ex["tp1"]))
-    # For SL, prefer existing SL_PCT env if set
-    if "sl" in ex:
-        os.environ.setdefault("SL_PCT", str(ex["sl"]))
-    if "trail_after_tp1" in ex:
-        os.environ.setdefault("TRAIL_AFTER_TP1_PCT", str(ex["trail_after_tp1"]))
-
-    # Runtime
-    rt = cfg.get("runtime", {}) or {}
-    if "consensus_ticks" in rt:
-        os.environ.setdefault("CONSENSUS_TICKS", str(rt["consensus_ticks"]))
-    if "symbol_universe" in rt:
-        os.environ.setdefault("SYMBOL_UNIVERSE", ",".join(rt["symbol_universe"]))
-        os.environ.setdefault("DISCOVER_SYMBOLS", "false")
-    if "poll_ms" in rt:
-        os.environ.setdefault("POLL_MS", str(rt["poll_ms"]))
-
-    # Risk overlays
-    rk = cfg.get("risk", {}) or {}
-    if "max_alloc_pct" in rk:
-        os.environ.setdefault("MAX_ALLOC_PCT", str(rk["max_alloc_pct"]))
-    if "min_free_balance_usdt" in rk:
-        os.environ.setdefault("MIN_FREE_BALANCE_USDT", str(rk["min_free_balance_usdt"]))
-    if "slippage_guard_pct" in rk:
-        os.environ.setdefault("SLIPPAGE_GUARD_PCT", str(rk["slippage_guard_pct"]))
+    # helper defs moved to app.runners.live_testnet_runner
 
 
 async def _actor_main(args) -> None:
