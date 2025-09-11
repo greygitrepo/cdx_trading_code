@@ -197,6 +197,30 @@ python bot/scripts/run_live_testnet.py --strategy obflow \
   --strategy-param depth_imb_L5_min=0.25 --strategy-param spread_tight_mult_mid=0.0007
 ```
 
+## 환경 변수 vs YAML 우선순위
+
+- 개요: YAML이 전략/리스크/신호/라우팅의 단일 소스이며, 환경 변수는 운영 토글과 비밀(키), 소수의 런타임 오버라이드에만 사용합니다.
+- 전략 파라미터 우선순위: CLI `--strategy/--strategy-param` > YAML(base + profile overlay) > 기본값
+- 운영 토글/키 우선순위: 환경 변수 > 기본값
+
+- 전략/파라미터(YAML)
+  - `exchange.*`, `risk.*`, `params.*`(obflow/execution/entry_exit/universe/regime 등), `runtime.*`
+  - 프로파일 오버레이: `bot/configs/profiles/*.yaml`에서 base를 덮어씀
+
+- 운영/비밀(환경 변수)
+  - `BYBIT_API_KEY`, `BYBIT_API_SECRET`: 거래소 인증 키/비밀
+  - `LIVE_MODE`, `TESTNET`, `STUB_MODE`, `PAPER_MODE`: 실행 모드 전환
+  - `DRY_RUN`: 주문 전송 금지(로그만 기록)
+  - `ENABLE_PRIVATE_WS`: 주문/체결/포지션 프라이빗 스트림 수집
+  - `POSITION_MODE`: `ONEWAY|HEDGE` 포지션 모드
+  - `ACCOUNT_TYPE`: `UNIFIED|CONTRACT` 계정 타입
+  - `FEE_ASSUME_ENTRY`, `FEE_ASSUME_EXIT`: 수수료 가정(bps)으로 TP/SL 보정에 사용
+  - `ORDER_SIZE_USDT`: 고정 공사이즈(선택적 오버라이드; 없으면 YAML 리스크/레버리지로 산출)
+  - `SKIP_SMOKE_CANCEL`, `DEBUG_OPEN_ORDERS`: 운영/디버그 토글
+  - `TRADE_LEDGER_ENABLED`, `TRADE_LEDGER_FORMATS`: 리포팅 출력 제어
+
+참고: 러너는 시작 시 `config:resolved` 이벤트를 남겨 최종 적용된 YAML 파라미터를 JSONL에 기록합니다.
+
 ### 퀵-테스트 프로파일(테스트넷 빠른 체결)
 
 테스트넷에서 라이브 배선을 빠르게 검증하고 다수 체결을 유도하려면:
