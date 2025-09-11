@@ -21,6 +21,13 @@ class SymbolActor:
 
     async def step(self) -> None:
         now_ms = int(self.clock() * 1000)
+        # Handle a single APEX signal event (test-oriented injection)
+        if self.last_md and self.last_md.get("type") == "apex_signal":
+            payload = self.last_md.get("payload", {})
+            side = str(payload.get("side", "BUY")).capitalize()
+            idem = f"{self.symbol}-{now_ms}-apex"
+            await self.router.send(order={"symbol": self.symbol, "side": side, "qty": self.cfg["risk"]["qty"]}, idem_key=idem)
+            return
         if self.state in ("IDLE", "EVAL"):
             if (
                 self.last_md

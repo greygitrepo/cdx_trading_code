@@ -195,7 +195,17 @@ python bot/scripts/run_live_testnet_obflow.py --profile quick-test
 # 전략 파라미터 CLI 오버라이드
 python bot/scripts/run_live_testnet.py --strategy obflow \
   --strategy-param depth_imb_L5_min=0.25 --strategy-param spread_tight_mult_mid=0.0007
+
+# APEX 전략 실행(런타임 통합 경로)
+python bot/scripts/run_live_testnet.py --profile quick-test --strategy apex
 ```
+
+### APEX 개요
+- 전략: 레짐 전환형 스캘퍼
+  - Regime A: VWAP 평균회귀 진입(PostOnly TTL)
+  - Regime B: 모멘텀 돌파 진입(보통 IOC/Market)
+- 러너 통합: scanner→regime→signal→apex_executor→router(동등)→trade_state(동등)
+- 문서: `docs/spec_apex.md`
 
 ## 환경 변수 vs YAML 우선순위
 

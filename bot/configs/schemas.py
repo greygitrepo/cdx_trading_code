@@ -168,7 +168,7 @@ class RuntimeOptions(BaseModel):
     Exposed in `config.yaml` under `runtime`. Currently supports strategy selection.
     """
 
-    strategy: Literal["pack", "obflow"] = Field(
+    strategy: Literal["pack", "obflow", "apex"] = Field(
         "pack",
         description="Deprecated: prefer AppConfig.strategy.name. Kept for back-compat.",
     )

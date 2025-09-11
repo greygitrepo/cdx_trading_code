@@ -210,6 +210,60 @@ class LiveTestnetOrchestrator:
             pass
         return signal, {"mis": mis, "vrs": vrs, "lsr": lsr}
 
+    @staticmethod
+    def decide_apex_signal(
+        *,
+        symbol: str,
+        mid: float,
+        spread: float,
+        obi: float,
+        runtime: Any,
+        logger: logging.Logger,
+        slog: Any,
+    ) -> tuple[dict | None, dict]:
+        """Decide APEX signal using a minimal live context.
+
+        This integrates the APEX path without depending on heavy historical
+        indicators. Many fields are conservative placeholders.
+        """
+        try:
+            from bot.core.signals.apex_scalper import APEXConfig, decide_apex  # local import
+        except Exception:
+            return None, {}
+        cfg = APEXConfig.from_params(runtime.params)
+        try:
+            ob_bid_w = max(0.0, min(1.0, (float(obi) + 1.0) / 2.0))
+        except Exception:
+            ob_bid_w = 0.5
+        ctx = {
+            "adx14": float(getattr(runtime.params.indicators, "adx_len", 14)),
+            "rv_15m_pct": 1.0,
+            "vol_spike_mult": 1.0,
+            "rsi2": 50.0,
+            "bb_touch": False,
+            "vwap_dev_pct": 0.0,
+            "ob_bid_w": ob_bid_w,
+            "ema_fast": float(getattr(runtime.params.indicators, "ema_fast", 9)),
+            "ema_slow": float(getattr(runtime.params.indicators, "ema_slow", 21)),
+            "above_vwap": True,
+            "abuy_share_10s": 0.0,
+            "ret1m_pct": 0.0,
+        }
+        sig = decide_apex(ctx, cfg)
+        try:
+            slog.log_signal(
+                ts=int(time.time() * 1000),
+                symbol=symbol,
+                scores={"apex": ctx},
+                decision=(None if not sig else f"APEX:{sig.get('play')}:{sig.get('side')}")
+            )
+        except Exception:
+            pass
+        if not sig:
+            return None, ctx
+        sig["side"] = str(sig.get("side", "BUY")).upper()
+        return sig, ctx
+
     # ----- Order build/place/report helpers -----
     @staticmethod
     def build_order_plan_and_log(*, signal: int, symbol: str, mid: float, equity: float, leverage: float, flt: dict,
@@ -818,6 +872,14 @@ class LiveTestnetRunner:
                 if signal is None:
                     time.sleep(loop_interval)
                     continue
+            elif strategy == "apex":
+                sig, _apx_ctx = LiveTestnetOrchestrator.decide_apex_signal(
+                    symbol=symbol, mid=mid, spread=spread, obi=obi, runtime=runtime, logger=logger, slog=slog
+                )
+                if not sig:
+                    time.sleep(loop_interval)
+                    continue
+                signal = +1 if str(sig.get("side")) == "BUY" else -1
             else:
                 # Simplified pack using empty history (script maintains Rolling; runner keeps parity by fast-continue)
                 signal, _ = LiveTestnetOrchestrator.decide_pack_signal(
@@ -861,6 +923,22 @@ class LiveTestnetRunner:
                 logger=logger,
                 slog=slog,
             )
+
+            # For APEX, adapt order type/tif/price via executor
+            if strategy == "apex":
+                try:
+                    from bot.core.apex_executor import build_entry_from_signal  # local import
+                    post_ttl = None
+                    try:
+                        post_ttl = int(getattr(getattr(runtime.params.apex, "strategy_A", object()), "entry_ttl_sec", 20))
+                    except Exception:
+                        post_ttl = None
+                    ep = build_entry_from_signal(signal=sig, last_mid=mid, qty=plan.qty, post_only_ttl_sec=post_ttl)
+                    plan.order_type = ep.type
+                    plan.tif = ep.tif
+                    plan.price = (ep.price if ep.price is not None else None)
+                except Exception:
+                    pass
 
             # Risk: cap vs effective notional
             notional_gross = plan.qty * mid
@@ -1084,6 +1162,17 @@ class LiveTestnetRunner:
                 max_trail_offset_pct=(pct(rec.max_trail_offset_pct) if getattr(rec, "max_trail_offset_pct", None) is not None else None),
             )
 
+        # Resolve selected strategy: prefer app.strategy.name, fallback to runtime.strategy (back-compat)
+        try:
+            selected_strategy = str(getattr(getattr(runtime.app, "strategy", object()), "name", "") or "").strip().lower()
+        except Exception:
+            selected_strategy = ""
+        if not selected_strategy:
+            try:
+                selected_strategy = str(getattr(runtime.app.runtime, 'strategy', 'obflow')).strip().lower()
+            except Exception:
+                selected_strategy = "obflow"
+
         LiveTestnetRunner.run_loop(
             client=BybitV5Client(),
             runtime=runtime,
@@ -1095,7 +1184,7 @@ class LiveTestnetRunner:
             row_builder=_build_row_from_rec,
             run_id=run_id,
             category=category,
-            strategy=str(getattr(runtime.app.runtime, 'strategy', 'obflow')),
+            strategy=selected_strategy,
             leverage=float(getattr(runtime.app.risk, 'max_leverage', 10)),
             fixed_notional=_env_float("ORDER_SIZE_USDT", 0.0),
             maker_fee_bps=maker_fee_bps,
