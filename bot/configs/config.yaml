@@ -1,6 +1,6 @@
 exchange:
   name: bybit
-  network: testnet
+  network: mainnet
   category: linear
   symbols: [BTCUSDT, ETHUSDT, SOLUSDT, DOGEUSDT]  # BTC 단일 → 유동성 상위 확장
   prefer_maker_bps_threshold: 0.04

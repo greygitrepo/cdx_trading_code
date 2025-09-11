@@ -868,7 +868,7 @@ class LiveTestnetRunner:
                 continue
 
             # Skip if open pos/orders
-            if LiveTestnetOrchestrator.should_skip_for_open_position_or_orders(
+            if LiveTestnetRunner.should_skip_for_open_position_or_orders(
                 client, category=category, symbol=symbol, logger=logger, slog=slog, loop_interval=loop_interval
             ):
                 continue
