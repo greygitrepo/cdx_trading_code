@@ -645,25 +645,9 @@ def main() -> None:
     blacklist: dict[str, int] = {}
 
     while not exit_flag.check():
-        # Optionally refresh universe each loop to keep symbols up-to-date
         try:
             if bool(getattr(runtime.app.runtime, 'refresh_universe_each_loop', True)):
-                uni_new = build_universe(client, topN=runtime.params.universe.topN, discover=bool(getattr(runtime.app.runtime, 'discover_symbols', True)))
-                # Exclude symbols with open positions best-effort
-                try:
-                    pos_all = client.get_positions(category=category, settleCoin="USDT")
-                    plist = pos_all.get("result", {}).get("list", [])
-                    open_syms = {
-                        str(p.get("symbol"))
-                        for p in plist
-                        if p.get("symbol") and abs(float(p.get("size") or 0)) > 0
-                    }
-                except Exception:
-                    open_syms = set()
-                symbols_ref = [s for s in uni_new.symbols if s not in open_syms] or uni_new.symbols
-                if symbols_ref:
-                    from bot.core.rotation import Universe as _U
-                    uni = _U(symbols=symbols_ref, discovered=uni_new.discovered)
+                uni = LiveTestnetOrchestrator.refresh_universe(client, runtime, category, logger)
         except Exception:
             pass
 
@@ -675,30 +659,9 @@ def main() -> None:
             continue
         idx += 1
 
-        # 1.5) Load instrument filters & set leverage
-        try:
-            ins = client.get_instruments(category=category)
-            flt = client.extract_symbol_filters(ins, symbol)
-            logger.info(
-                f"Instrument filters for {symbol}: tickSize={flt.get('tickSize')} qtyStep={flt.get('qtyStep')} minQty={flt.get('minOrderQty')}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to fetch instrument filters: {e}")
-            flt = {"tickSize": None, "qtyStep": None, "minOrderQty": None}
-
-        try:
-            client.set_leverage(
-                symbol=symbol,
-                buyLeverage=int(leverage),
-                sellLeverage=int(leverage),
-                category=category,
-            )
-            logger.info("Leverage set OK")
-        except BybitAPIError as e:
-            if getattr(e, "ret_code", None) == 110043:
-                logger.info("Leverage unchanged (110043): desired leverage already set")
-            else:
-                logger.warning(f"Set leverage failed: {e}")
+        # 1.5) Load instrument filters & set leverage (via orchestrator)
+        flt = LiveTestnetOrchestrator.load_instrument_filters(client, category, symbol, logger)
+        LiveTestnetOrchestrator.set_leverage(client, symbol, leverage, category, logger)
 
         # Per-symbol tick loop
         mids: list[float] = []
@@ -709,50 +672,15 @@ def main() -> None:
         est_entry: dict[str, float | str] | None = None  # keys: side, qty, avg, fee_remain
 
         ob_depth = _env_int("ORDERBOOK_DEPTH", 1)
-        for i in range(consensus_ticks):
-            if exit_flag.check():
-                break
-            ob = client.get_orderbook(symbol=symbol, depth=ob_depth, category=category)
-        slog.log_info(
-            ts=int(time.time() * 1000),
-            symbol=symbol,
-            tag="orderbook",
-            payload=ob.get("result", {}),
+        ob_ctx = LiveTestnetOrchestrator.get_orderbook_context(
+            client, symbol=symbol, category=category, ob_depth=ob_depth, logger=logger, slog=slog
         )
-        parse_ok = False
-        try:
-            bids = ob["result"]["b"] if ob.get("result") and ob["result"].get("b") else []
-            asks = ob["result"]["a"] if ob.get("result") and ob["result"].get("a") else []
-            if not bids or not asks:
-                raise ValueError("empty bids/asks")
-            best_bid = float(bids[0][0])
-            best_ask = float(asks[0][0])
-            bid_sz = float(bids[0][1]) if len(bids[0]) > 1 else 0.0
-            ask_sz = float(asks[0][1]) if len(asks[0]) > 1 else 0.0
-            mid = (best_bid + best_ask) / 2
-            spread = (best_ask - best_bid) / mid if mid > 0 else 0.0
-            obi = (
-                (bid_sz - ask_sz) / (bid_sz + ask_sz) if (bid_sz + ask_sz) > 0 else 0.0
-            )
-            parse_ok = True
-        except Exception as e:
-            logger.info(f"Failed to parse orderbook (fallback to ticker): {e}")
-            # Fallback: use ticker for mid/spread estimate
-            try:
-                tk = client.get_tickers(category=category, symbol=symbol)
-                it = (tk.get("result", {}).get("list", []) or [{}])[0]
-                a1 = float(it.get("ask1Price") or 0)
-                b1 = float(it.get("bid1Price") or 0)
-                if a1 > 0 and b1 > 0:
-                    mid = (a1 + b1) / 2
-                    spread = (a1 - b1) / mid if mid > 0 else 0.0
-                    bid_sz = float(it.get("bid1Size") or 0)
-                    ask_sz = float(it.get("ask1Size") or 0)
-                    obi = 0.0
-                    logger.info("Used ticker-based mid/spread fallback")
-                    parse_ok = True
-            except Exception as e2:
-                logger.warning(f"Ticker fallback failed: {e2}")
+        mid = ob_ctx["mid"]
+        spread = ob_ctx["spread"]
+        bid_sz = ob_ctx["bid_sz"]
+        ask_sz = ob_ctx["ask_sz"]
+        obi = ob_ctx["obi"]
+        parse_ok = bool(ob_ctx["parse_ok"]) 
         if not parse_ok:
             blacklist[symbol] = int(time.time()) + 300
             slog.log_why_no_trade(
@@ -822,39 +750,15 @@ def main() -> None:
                     time.sleep(loop_interval)
                     continue
                 # Also skip if there are open opening orders (best-effort)
-                try:
-                    oo = client.get_open_orders(symbol=symbol)
-                    raw_list = oo.get("result", {}).get("list", []) or []
-                    # Consider only truly opening orders:
-                    # - reduceOnly != True (we allow reduce-only orders to coexist)
-                    # - orderStatus in open states (New/PartiallyFilled/Untriggered)
-                    open_states = {"New", "PartiallyFilled", "Untriggered"}
-                    olist = []
-                    for it in raw_list:
-                        try:
-                            ro = it.get("reduceOnly") is True
-                            st = str(it.get("orderStatus") or "").strip()
-                            if ro:
-                                continue
-                            if st and st not in open_states:
-                                continue
-                            olist.append(it)
-                        except Exception:
-                            continue
-                    if os.environ.get("DEBUG_OPEN_ORDERS", "false").lower() == "true":
-                        logger.info(f"OpenOrders(raw={len(raw_list)} filtered={len(olist)}): sample={olist[0] if olist else None}")
-                    if olist:
-                        logger.info("Skip: open orders present for symbol (avoid duplicate)")
-                        slog.log_why_no_trade(
-                            ts=int(time.time() * 1000),
-                            symbol=symbol,
-                            reasons=["skip_open_orders"],
-                            context={"open_orders": len(olist)},
-                        )
-                        time.sleep(loop_interval)
-                        continue
-                except Exception:
-                    pass
+                if LiveTestnetOrchestrator.should_skip_for_open_position_or_orders(
+                    client,
+                    category=category,
+                    symbol=symbol,
+                    logger=logger,
+                    slog=slog,
+                    loop_interval=loop_interval,
+                ):
+                    continue
         except Exception:
             pass
 
