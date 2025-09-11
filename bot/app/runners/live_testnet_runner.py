@@ -572,7 +572,12 @@ class LiveTestnetOrchestrator:
                         from math import ceil, floor
                         tp_abs2 = floor(tp_abs2 / tick) * tick
                         sl_abs2 = ceil(sl_abs2 / tick) * tick
-                trailing_abs2 = round(avg_price * float(os.environ.get("SL_PCT", 0.0020)), 4)
+                try:
+                    trail_pct_env = os.environ.get("TRAIL_AFTER_TP1_PCT")
+                    trail_pct = float(trail_pct_env) if (trail_pct_env is not None and trail_pct_env != "") else float(os.environ.get("SL_PCT", 0.0020))
+                except Exception:
+                    trail_pct = float(os.environ.get("SL_PCT", 0.0020))
+                trailing_abs2 = round(avg_price * trail_pct, 4)
                 try:
                     client.set_trading_stop(
                         symbol=symbol,
@@ -976,6 +981,24 @@ class LiveTestnetRunner:
                 taker_fee_bps=taker_fee_bps,
                 tick=tick,
             )
+            # APEX: 시그널별 TP/SL/부분청산/트레일/타임스탑 환경변수 매핑
+            if strategy == "apex":
+                try:
+                    if isinstance(sig, dict):
+                        if sig.get("tp1_pct") is not None:
+                            os.environ["TP_PCT"] = str(float(sig.get("tp1_pct")))
+                        if sig.get("sl_pct") is not None:
+                            os.environ["SL_PCT"] = str(float(sig.get("sl_pct")))
+                        if sig.get("tp1_size") is not None:
+                            os.environ["PARTIAL_CLOSE_PCT"] = str(float(sig.get("tp1_size")))
+                        # Regime B에서 제공되는 트레일 파라미터 우선 사용
+                        if sig.get("trail_after_tp1_pct") is not None:
+                            os.environ["TRAIL_AFTER_TP1_PCT"] = str(float(sig.get("trail_after_tp1_pct")))
+                        # 공통 타임스탑
+                        if sig.get("time_stop_sec") is not None:
+                            os.environ["TIME_STOP_SEC"] = str(int(sig.get("time_stop_sec")))
+                except Exception:
+                    pass
             try:
                 _, est_entry = LiveTestnetOrchestrator.place_order_and_record(
                     client=client,
@@ -1000,6 +1023,27 @@ class LiveTestnetRunner:
                 continue
 
             oo = LiveTestnetOrchestrator.log_open_orders(client, symbol=symbol, logger=logger, slog=slog)
+            ttl_canceled = False
+            # APEX PostOnly TTL 적용: TTL 경과 후 미체결 시 취소
+            if strategy == "apex":
+                try:
+                    if (
+                        plan.order_type == "Limit"
+                        and plan.tif == "PostOnly"
+                        and 'ep' in locals()
+                        and getattr(ep, 'ttl_sec', None)
+                        and int(getattr(ep, 'ttl_sec')) > 0
+                    ):
+                        ttl_s = int(getattr(ep, 'ttl_sec'))
+                        logger.info(f"APEX TTL 대기 {ttl_s}s 후 미체결 시 취소")
+                        time.sleep(ttl_s)
+                        oo_ttl = LiveTestnetOrchestrator.log_open_orders(client, symbol=symbol, logger=logger, slog=slog)
+                        LiveTestnetOrchestrator.cancel_if_open(
+                            client=client, symbol=symbol, plan=plan, oo=oo_ttl, logger=logger, slog=slog
+                        )
+                        ttl_canceled = True
+                except Exception:
+                    pass
             LiveTestnetOrchestrator.handle_positions_after_entry(
                 client=client,
                 category=category,
@@ -1021,9 +1065,10 @@ class LiveTestnetRunner:
                 slog=slog,
                 est_entry=est_entry,
             )
-            LiveTestnetOrchestrator.cancel_if_open(
-                client=client, symbol=symbol, plan=plan, oo=oo, logger=logger, slog=slog
-            )
+            if not ttl_canceled:
+                LiveTestnetOrchestrator.cancel_if_open(
+                    client=client, symbol=symbol, plan=plan, oo=oo, logger=logger, slog=slog
+                )
             time.sleep(loop_interval)
             logger.info(f"Cycle done for {symbol}; rotating if needed")
 
