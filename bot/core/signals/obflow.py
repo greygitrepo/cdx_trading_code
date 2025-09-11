@@ -34,7 +34,7 @@ class OBFlowConfig:
     d_micro_dev_mult_spread: float = 0.40
 
     @staticmethod
-    def from_params(params: "bot.configs.schemas.ParamsPack") -> "OBFlowConfig":  # type: ignore[name-defined]
+    def from_params(params: Any) -> "OBFlowConfig":  # type: ignore[type-arg]
         p = getattr(params, "obflow", None)
         if p is None:
             return OBFlowConfig()

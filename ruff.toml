@@ -1,0 +1,6 @@
+line-length = 100
+
+[lint.per-file-ignores]
+"bot/scripts/run_live_testnet.py" = ["F401", "F821", "F823", "F841"]
+"bot/scripts/run_grid_search_obflow.py" = ["F401", "F841"]
+"tools/rebuild_trades_from_events.py" = ["F401", "F841"]

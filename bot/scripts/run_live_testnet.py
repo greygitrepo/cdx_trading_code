@@ -48,6 +48,8 @@ try:
     from bot.core.config import load_runtime
     from bot.core.rotation import build_universe, ExitFlag
     from bot.core.ledger import TradeLedger
+    from bot.app.runners.live_runner import LiveRunner
+    from bot.app.wiring import AppContext as _AppCtx
     from bot.utils.structlog import StructLogger, init_run_dir
     from bot.core.event_bus import EventBus
     from bot.core.order_router import OrderRouter
@@ -82,6 +84,8 @@ except Exception:  # pragma: no cover - fallback for direct script runs
     from bot.core.market_data_hub import MarketDataHub
     from bot.actors.symbol_actor import SymbolActor
     from bot.core.ledger import TradeLedger
+    from bot.app.runners.live_runner import LiveRunner
+    from bot.app.wiring import AppContext as _AppCtx
 
 import yaml  # type: ignore
 
@@ -286,9 +290,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--strategy",
-        default=os.environ.get("STRATEGY", "pack"),
-        choices=["pack", "obflow"],
-        help="pack=기존 MIS/VRS/LSR, obflow=OB-Flow 신호 사용",
+        default=os.environ.get("STRATEGY", "obflow"),
+        help="Strategy name registered in registry (default: obflow)",
+    )
+    parser.add_argument(
+        "--strategy-param",
+        action="append",
+        default=[],
+        help="Override strategy param as k=v (can repeat)",
     )
     parser.add_argument(
         "--actor-mode",
@@ -325,6 +334,43 @@ def main() -> None:
     require_env_flags(logger)
     # Load YAML (single source) and export key params into ENV with precedence: YAML > ENV > Defaults
     runtime = load_runtime()
+    # Apply CLI strategy selection into AppConfig (preserve existing defaults)
+    cli_strategy = (args.strategy or "").strip()
+    if cli_strategy:
+        try:
+            runtime.app.strategy.name = cli_strategy
+        except Exception:
+            pass
+    # Parse repeated --strategy-param k=v into dict
+    sp: dict[str, str] = {}
+    for item in (args.strategy_param or []):
+        if not item or "=" not in item:
+            continue
+        k, v = item.split("=", 1)
+        sp[k.strip()] = v.strip()
+    try:
+        # Merge params with precedence: CLI > YAML
+        merged = dict(getattr(runtime.app.strategy, "params", {}) or {})
+        merged.update(sp)
+        runtime.app.strategy.params = merged
+    except Exception:
+        pass
+    # Build and write strategy header for reproducibility
+    try:
+        header = LiveRunner.build_header(app_ctx=None, config=runtime.app)
+        write_event(
+            logs_dir,
+            {
+                "ts": int(time.time() * 1000),
+                "run_id": run_id,
+                "step": "run_header",
+                "strategy_name": header.strategy_name,
+                "strategy_cfg_hash": header.strategy_cfg_hash,
+                "strategy_params": header.params,
+            },
+        )
+    except Exception:
+        pass
     def _export_resolved_from_yaml() -> None:
         resolved: dict[str, str | float | int | bool] = {}
         warnings: list[dict] = []
@@ -421,7 +467,7 @@ def main() -> None:
     fund = runtime.params.funding_time
     execp = getattr(runtime.params, "execution", None)
     # Strategy selection precedence: CLI > ENV > config
-    strategy = (args.strategy or "").strip().lower()
+    strategy = (args.strategy or runtime.app.strategy.name or "").strip().lower()
     if not strategy:
         strategy = os.environ.get("STRATEGY", "").strip().lower()
     if not strategy:

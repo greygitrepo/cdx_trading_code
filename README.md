@@ -198,6 +198,29 @@ HTML 리포트는 체결률/슬리피지 추정/요약과 함께 `reports/quick_
 주의: 실거래 전에는 보수 설정으로 되돌리거나 `--profile quick-test`를 생략하세요.
 
 ## Replay/Backtest (Stub LOB)
+
+## 전략 플러그인 추가 가이드
+
+전략은 플러그인 방식으로 선택/교체합니다.
+
+- 구현: `bot/strategies/<your_strategy>/strategy.py`에서 `bot.core.strategy_api.BaseStrategy` 상속
+- 등록: `bot/strategies/registry.py`에 엔트리포인트 추가
+  - 예: `"your_strategy": "bot.strategies.your_strategy.strategy:YourStrategyClass"`
+- 설정(YAML): `bot/configs/config.yaml` 또는 `bot/configs/profiles/*.yaml`
+  ```yaml
+  strategy:
+    name: your_strategy
+    params:
+      window: 5
+      threshold: 0.003
+  ```
+- 실행(우선순위: CLI > YAML):
+  ```bash
+  python bot/scripts/run_live_testnet.py --profile quick-test --strategy your_strategy \
+    --strategy-param window=10 --strategy-param threshold=0.002
+  ```
+
+각 런의 `events.jsonl`에는 `strategy_name`, `strategy_cfg_hash`가 헤더로 기록되어 재현성을 보장합니다. 기본 전략은 `obflow`입니다.
 - OB-Flow 리플레이: `bot/scripts/run_replay_obflow.py`는 `data/stubs/ws/orderbook1_<SYMBOL>.jsonl`을 재생해 신호/부분청산/트레일/타임스탑/쿨다운 동작을 점검합니다.
 ```
 python bot/scripts/run_replay_obflow.py --symbol BTCUSDT --max-sec 60 --qty-usdt 50

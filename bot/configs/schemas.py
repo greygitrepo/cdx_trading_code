@@ -142,6 +142,13 @@ class ParamsPack(BaseModel):
     funding_time: FundingTimeParams = FundingTimeParams()
 
 
+class StrategySelection(BaseModel):
+    """Strategy selection and parameters for plugin architecture."""
+
+    name: str = Field("obflow")  # default OB-Flow
+    params: dict = Field(default_factory=dict)
+
+
 class AppConfig(BaseModel):
     """Top-level application config."""
 
@@ -150,6 +157,8 @@ class AppConfig(BaseModel):
     exchange: ExchangeConfig = ExchangeConfig()
     risk: RiskConfig = RiskConfig()
     params: ParamsPack = ParamsPack()
+    # New strategy section (behavior-preserving default is obflow)
+    strategy: StrategySelection = Field(default_factory=StrategySelection)
     runtime: "RuntimeOptions" = Field(default_factory=lambda: RuntimeOptions())
 
 
@@ -160,7 +169,8 @@ class RuntimeOptions(BaseModel):
     """
 
     strategy: Literal["pack", "obflow"] = Field(
-        "pack", description="Select execution strategy: pack (MIS/VRS/LSR) or obflow"
+        "pack",
+        description="Deprecated: prefer AppConfig.strategy.name. Kept for back-compat.",
     )
     # Discovery/rotation
     discover_symbols: bool = True
@@ -189,7 +199,9 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 def load_app_config(path: Path) -> AppConfig:
     obj = load_yaml(path)
-    # Backward compatible: allow missing `runtime` section
+    # Backward compatible: allow missing `runtime`/`strategy` sections
+    if "strategy" not in obj:
+        obj["strategy"] = {"name": obj.get("runtime", {}).get("strategy", "obflow"), "params": {}}
     app = AppConfig(**obj)
     runtime_obj = obj.get("runtime") if isinstance(obj, dict) else None
     try:
