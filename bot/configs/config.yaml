@@ -22,7 +22,7 @@ risk:
 
 params:
   universe:
-    topN: 12
+    topN: 6
     spread_max_mult: 1.4           # 1.5 → 1.4 (스프레드 관리 강화)
     spread_threshold_pct: 0.0004    # 레짐 스프레드 임계(미드 대비 비율)
     depth_drop_pause: 0.70
@@ -151,7 +151,7 @@ runtime:
   # 디스커버리/회전
   discover_symbols: true           # 디스커버리 사용 여부
   consensus_ticks: 3               # 진입 전 관찰 틱 수
-  no_trade_sleep_sec: 3.0          # 미진입 시 대기
+  no_trade_sleep_sec: 1.0          # 미진입 시 대기
   loop_idle_sec: 1.0               # 회전 간 간격
   exit_key: "q"                    # 종료 키
   refresh_universe_each_loop: true # 매 루프 유니버스 갱신

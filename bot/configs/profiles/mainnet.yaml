@@ -43,7 +43,7 @@ runtime:
   strategy: apex
   discover_symbols: false
   consensus_ticks: 3
-  no_trade_sleep_sec: 3.0
+  no_trade_sleep_sec: 1.0
   loop_idle_sec: 1.0
   exit_key: "q"
   refresh_universe_each_loop: true

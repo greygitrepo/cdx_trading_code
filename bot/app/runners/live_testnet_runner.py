@@ -1565,17 +1565,21 @@ class LiveTestnetRunner:
             now = time.time()
             t_pos, pos = LiveTestnetRunner._pos_cache.get(symbol, (0.0, {}))
             if not pos or (now - t_pos) >= max(0.5, ttl):
-                pos = client.get_position_info(category=category, symbol=symbol)
+                # Use get_positions (available on our client) instead of a missing get_position_info
+                pos = client.get_positions(category=category, symbol=symbol)
                 LiveTestnetRunner._pos_cache[symbol] = (now, pos)
             long_size = 0.0
             short_size = 0.0
+            net_size = 0.0
             try:
                 it = (pos.get("result", {}).get("list", []) or [{}])[0]
                 long_size = float(it.get("longSize") or 0)
                 short_size = float(it.get("shortSize") or 0)
+                net_size = abs(float(it.get("size") or 0))
             except Exception:
                 pass
-            if long_size > 0 or short_size > 0:
+            # If any open position exists (hedge or oneway), skip entries to avoid accidental flips
+            if (long_size > 0) or (short_size > 0) or (net_size > 0):
                 logger.info("Skip: existing position present (avoid duplicate)")
                 try:
                     slog.log_why_no_trade(ts=int(time.time() * 1000), symbol=symbol, reasons=["skip_existing_position"], context={})
@@ -1586,7 +1590,7 @@ class LiveTestnetRunner:
             try:
                 t_oo, oo = LiveTestnetRunner._oo_cache.get(symbol, (0.0, {}))
                 if not oo or (now - t_oo) >= max(0.5, ttl):
-                    oo = client.get_open_orders(symbol=symbol)
+                    oo = client.get_open_orders(symbol=symbol, category=category)
                     LiveTestnetRunner._oo_cache[symbol] = (now, oo)
                 raw_list = oo.get("result", {}).get("list", []) or []
                 open_states = {"New", "PartiallyFilled", "Untriggered"}
