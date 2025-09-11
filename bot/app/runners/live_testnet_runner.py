@@ -384,6 +384,295 @@ class LiveTestnetOrchestrator:
         est_entry = {"side": plan.side, "qty": float(plan.qty), "avg": entry_px, "fee_remain": entry_fee}
         return res, est_entry
 
+    # ----- Post-entry processing: open orders/positions, partials, trailing, time-stop -----
+    @staticmethod
+    def log_open_orders(client: Any, *, symbol: str, logger: logging.Logger, slog: Any) -> dict:
+        try:
+            oo = client.get_open_orders(symbol=symbol)
+            try:
+                slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="open_orders", payload=oo)
+            except Exception:
+                pass
+            return oo
+        except Exception as e:
+            logger.warning(f"Open orders fetch failed: {e}")
+            return {}
+
+    @staticmethod
+    def handle_positions_after_entry(
+        *, client: Any, category: str, symbol: str, strategy: str, mid: float, spread: float, obi: float,
+        prefer_limit: bool, flt: dict, maker_fee_bps: float, taker_fee_bps: float,
+        ledger: Any, tl_writer: Any, tle_formats: list[str], row_builder: Any, run_id: str,
+        logger: logging.Logger, slog: Any, est_entry: dict | None,
+    ) -> None:
+        def _position_mode() -> str:
+            v = os.environ.get("POSITION_MODE", "ONEWAY").strip().upper()
+            return v if v in {"ONEWAY", "HEDGE"} else "ONEWAY"
+
+        def _position_idx_for_side(side_long: bool, mode: str) -> int | None:
+            if mode != "HEDGE":
+                return None
+            return 1 if side_long else 2
+
+        def _fee_amount(notional: float, bps: float) -> float:
+            try:
+                return abs(float(notional)) * max(0.0, float(bps)) / 1e4
+            except Exception:
+                return 0.0
+
+        try:
+            pos = client.get_positions(category=category, symbol=symbol)
+            try:
+                slog.log_info(ts=int(time.time() * 1000), symbol=symbol, tag="positions", payload=pos)
+            except Exception:
+                pass
+            plist = pos.get("result", {}).get("list", [])
+            if not plist:
+                return
+            p = plist[0]
+            size = abs(float(p.get("size") or 0))
+            side_long = p.get("side") == "Buy"
+            avg_price = float(p.get("avgPrice") or 0)
+            # OB-Flow partial TP logic
+            if strategy == "obflow" and size > 0 and avg_price > 0:
+                try:
+                    tp1 = float(os.environ.get("TP_PCT", 0.0012))
+                    partial_pct = float(os.environ.get("PARTIAL_CLOSE_PCT", 0.5))
+                    move = ((mid - avg_price) / avg_price) if side_long else ((avg_price - mid) / avg_price)
+                    if move >= tp1 and partial_pct > 0:
+                        pq = max(0.0, size * min(1.0, partial_pct))
+                        if pq > 0:
+                            try:
+                                pos_idx2 = _position_idx_for_side(side_long, _position_mode())
+                                link_partial = f"cdx-partial-{int(time.time()*1000)}"
+                                client.place_order(
+                                    symbol=symbol,
+                                    side=("Sell" if side_long else "Buy"),
+                                    qty=str(pq),
+                                    orderType="Market",
+                                    timeInForce="IOC",
+                                    reduceOnly=True,
+                                    category=category,
+                                    orderLinkId=link_partial,
+                                    positionIdx=pos_idx2,
+                                )
+                                try:
+                                    ledger.on_order_submitted(symbol, link_partial, for_entry=False, label="partial_close")
+                                except Exception:
+                                    pass
+                                gross = ((mid - avg_price) * pq) if side_long else ((avg_price - mid) * pq)
+                                close_fee = _fee_amount(pq * mid, taker_fee_bps)
+                                proportional_entry_fee = 0.0
+                                if est_entry is not None and float(est_entry.get("qty", 0.0)) > 0:
+                                    base_qty = float(est_entry.get("qty", 0.0))
+                                    fee_rem = float(est_entry.get("fee_remain", 0.0))
+                                    if base_qty > 0:
+                                        frac = min(1.0, pq / base_qty)
+                                        proportional_entry_fee = fee_rem * frac
+                                        est_entry["fee_remain"] = max(0.0, fee_rem - proportional_entry_fee)
+                                        est_entry["qty"] = max(0.0, base_qty - pq)
+                                realized_net = gross - (proportional_entry_fee + close_fee)
+                                try:
+                                    slog.log_pnl(ts=int(time.time() * 1000), symbol=symbol, realized=realized_net, unrealized=None)
+                                except Exception:
+                                    pass
+                            except Exception as e:
+                                logger.warning(f"Partial close failed: {e}")
+                except Exception:
+                    pass
+            # Update MFE/MAE
+            try:
+                ledger.update_mfe_mae(symbol, now_price=mid)
+            except Exception:
+                pass
+            # Trailing stop after entry
+            try:
+                # Clear existing trailing first
+                try:
+                    client.set_trading_stop(
+                        symbol=symbol,
+                        trailingStop="",
+                        category=category,
+                        positionIdx=_position_idx_for_side(side_long, _position_mode()),
+                    )
+                except Exception:
+                    pass
+                fee_entry_mode = os.environ.get("FEE_ASSUME_ENTRY", "auto").lower()
+                fe_bps = maker_fee_bps if fee_entry_mode == "maker" else (taker_fee_bps if fee_entry_mode == "taker" else (maker_fee_bps if (prefer_limit and (os.environ.get("MAKER_POST_ONLY", "true").lower() == "true")) else taker_fee_bps))
+                fx_bps = taker_fee_bps if os.environ.get("FEE_ASSUME_EXIT", "taker").lower() != "maker" else maker_fee_bps
+                tp_net = float(os.environ.get("TP_PCT", 0.0010))
+                sl_net = float(os.environ.get("SL_PCT", 0.0020))
+                tp_abs2 = avg_price * (1 + tp_net + (fe_bps + fx_bps) / 1e4) if side_long else avg_price * (1 - tp_net - (fe_bps + fx_bps) / 1e4)
+                sl_abs2 = avg_price * (1 - sl_net + (fe_bps + fx_bps) / 1e4) if side_long else avg_price * (1 + sl_net - (fe_bps + fx_bps) / 1e4)
+                tick = flt.get("tickSize") if isinstance(flt, dict) else None
+                try:
+                    tick = float(tick) if tick is not None else None
+                except Exception:
+                    tick = None
+                if tick and tick > 0:
+                    if side_long:
+                        from math import ceil, floor
+                        tp_abs2 = ceil(tp_abs2 / tick) * tick
+                        sl_abs2 = floor(sl_abs2 / tick) * tick
+                    else:
+                        from math import ceil, floor
+                        tp_abs2 = floor(tp_abs2 / tick) * tick
+                        sl_abs2 = ceil(sl_abs2 / tick) * tick
+                trailing_abs2 = round(avg_price * float(os.environ.get("SL_PCT", 0.0020)), 4)
+                try:
+                    client.set_trading_stop(
+                        symbol=symbol,
+                        trailingStop=trailing_abs2,
+                        takeProfit=tp_abs2,
+                        stopLoss=sl_abs2,
+                        category=category,
+                        positionIdx=_position_idx_for_side(side_long, _position_mode()),
+                    )
+                    logger.info(
+                        f"Applied trailing stop after entry: tp={tp_abs2:.6f} sl={sl_abs2:.6f} trail={trailing_abs2:.6f}"
+                    )
+                    try:
+                        ledger.set_stops(symbol, tp_abs=tp_abs2, sl_abs=sl_abs2, trail_abs=trailing_abs2)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.warning(f"Set trailing stop after entry failed: {e}")
+            except Exception:
+                pass
+            # Time stop close
+            try:
+                time_stop_sec = int(float(os.environ.get("TIME_STOP_SEC", 1200)))
+                et = p.get("updatedTime") or p.get("createdTime")
+                if size > 0 and et is not None:
+                    held_sec = max(0, int((int(time.time() * 1000) - int(et)) / 1000))
+                    if held_sec >= time_stop_sec:
+                        try:
+                            qty = size
+                            side = "SELL" if side_long else "BUY"
+                            link_ts = f"cdx-time-{int(time.time()*1000)}"
+                            client.close_position_market(
+                                symbol=symbol,
+                                side=side,
+                                qty=str(qty),
+                                category=category,
+                                positionIdx=_position_idx_for_side(side_long, _position_mode()),
+                                orderLinkId=link_ts,
+                            )
+                            try:
+                                ledger.on_order_submitted(symbol, link_ts, for_entry=False, label="time_stop")
+                            except Exception:
+                                pass
+                            # executions to compute realized
+                            end_ms = int(time.time() * 1000)
+                            start_ms = end_ms - 15 * 60 * 1000
+                            ex = client.get_executions(symbol=symbol, category=category, start=start_ms, end=end_ms, limit=200)
+                            fills = (ex.get("result", {}) or {}).get("list", [])
+                            entry_fee = 0.0
+                            exit_fee = 0.0
+                            realized = 0.0
+                            entry_px_agg: list[tuple[float, float, bool]] = []
+                            exit_px_agg: list[tuple[float, float, bool]] = []
+                            for it in fills:
+                                try:
+                                    qty_f = float(it.get("execQty") or 0)
+                                    price_f = float(it.get("execPrice") or 0)
+                                    fee_f = float(it.get("execFee") or 0)
+                                    is_maker = bool(it.get("isMaker"))
+                                    side_f = str(it.get("side") or "").upper()
+                                    if side_f in {"BUY", "SELL"}:
+                                        realized += (price_f - avg_price) * qty_f if side_long and side_f == "SELL" else 0.0
+                                        realized += (avg_price - price_f) * qty_f if (not side_long) and side_f == "BUY" else 0.0
+                                        if (side_long and side_f == "BUY") or ((not side_long) and side_f == "SELL"):
+                                            entry_px_agg.append((price_f, qty_f, is_maker))
+                                        else:
+                                            exit_px_agg.append((price_f, qty_f, is_maker))
+                                    if side_f == ("BUY" if side_long else "SELL"):
+                                        entry_fee += fee_f
+                                    else:
+                                        exit_fee += fee_f
+                                except Exception:
+                                    continue
+                            total_fee = entry_fee + exit_fee
+                            # Determine reason
+                            reason = "TIME_STOP"
+                            try:
+                                rec = ledger.active.get(symbol)
+                                if rec and rec.tp_abs and rec.sl_abs:
+                                    tol = (flt.get("tickSize") or 0.0) or 0.0
+                                    last_exit_px = exit_px_agg[-1][0] if exit_px_agg else mid
+                                    if side_long and abs(last_exit_px - rec.tp_abs) <= max(2*tol, rec.tp_abs*1e-5):
+                                        reason = "TP"
+                                    elif side_long and abs(last_exit_px - rec.sl_abs) <= max(2*tol, rec.sl_abs*1e-5):
+                                        reason = "SL"
+                                    elif (not side_long) and abs(last_exit_px - rec.tp_abs) <= max(2*tol, rec.tp_abs*1e-5):
+                                        reason = "TP"
+                                    elif (not side_long) and abs(last_exit_px - rec.sl_abs) <= max(2*tol, rec.sl_abs*1e-5):
+                                        reason = "SL"
+                                    else:
+                                        reason = "TRAIL"
+                            except Exception:
+                                pass
+                            rec_done = ledger.on_exit(
+                                symbol=symbol,
+                                exit_ts=end_ms,
+                                price=mid,
+                                qty=size,
+                                reason=reason,
+                                exit_liquidity="taker",
+                                exit_fee_usdt=exit_fee,
+                                exit_slippage_pct=0.0,
+                                realized_pnl_usdt=realized - total_fee,
+                                exit_mid_ref=mid,
+                            )
+                            try:
+                                if tl_writer and rec_done:
+                                    row = row_builder(run_id, rec_done)
+                                    tl_writer.append(row, formats=tle_formats)
+                            except Exception:
+                                pass
+                            try:
+                                ledger.write_daily_summary()
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            logger.warning(f"Time stop close failed: {e}")
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"Positions fetch failed: {e}")
+
+    @staticmethod
+    def cancel_if_open(
+        *, client: Any, symbol: str, plan: Any, oo: dict, logger: logging.Logger, slog: Any
+    ) -> None:
+        if os.environ.get("SKIP_SMOKE_CANCEL", "false").lower() == "true":
+            return
+        if str(plan.order_type) != "Limit":
+            return
+        is_open = True
+        try:
+            lst = oo.get("result", {}).get("list", []) if oo else []
+            if lst:
+                open_ids = {it.get("orderLinkId") for it in lst}
+                is_open = plan.order_link_id in open_ids
+        except Exception:
+            pass
+        if not is_open:
+            logger.info("Skip cancel: order not open (filled/rejected/already canceled)")
+            return
+        try:
+            client.cancel_order(symbol=symbol, orderLinkId=plan.order_link_id)
+            try:
+                slog.log_cancel(ts=int(time.time() * 1000), symbol=symbol, order_link_id=plan.order_link_id, reason="rotate_or_smoke")
+            except Exception:
+                pass
+            logger.info("Order cancel sent")
+        except Exception as e:
+            if getattr(e, "ret_code", None) == 110001:
+                logger.info("Cancel skipped: order already not open (110001)")
+            else:
+                logger.error(f"Cancel failed: {e}")
+
 
     @staticmethod
     def refresh_universe(client: Any, runtime: Any, category: str, logger: logging.Logger):
