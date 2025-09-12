@@ -1,0 +1,11 @@
+anchors: ["prev_day_HL", "session_HL", "round_500", "round_1000", "vwap_band_1.0σ"]
+penetration_ticks: 4
+max_time_to_penetrate_ms: 2000
+z_flow_min: 3.0
+depth_ratio_max: 0.45
+lambda_drop_max: 0.45
+reentry_confirm_ms: 800
+taker_slippage_cap_bps: 6
+tp_bps: [25, 15]
+sl_bps: 18
+time_stop_sec: 12
